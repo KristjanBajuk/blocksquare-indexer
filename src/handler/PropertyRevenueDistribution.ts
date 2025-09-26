@@ -1,0 +1,84 @@
+import { PropertyRevenueDistribution } from 'generated';
+import { getNewPropertyTokenRevenue } from '../helper/PropertyTokenRevenue';
+import { getNewPropertyTokenRevenueDistribution } from '../helper/PropertyTokenRevenueDistribution';
+import { getAPY } from '../helper/APYCalculation';
+
+PropertyRevenueDistribution.RevenueAdded.handler(async ({ event, context }) => {
+  const propertyId = `${event.chainId}-${event.params.property}`;
+
+  const [propertyTokenRevenueDistributionsLoaded, propertyTokenRecordsLoaded, propertyTokenLoaded] = await Promise.all([
+      await context.PropertyTokenRevenueDistribution.getWhere.propertyToken_id.eq(propertyId),
+      await context.PropertyTokenRecord.getWhere.propertyToken_id.eq(propertyId),
+      await context.PropertyToken.getOrThrow(propertyId, 'PropertyRevenueDistribution.RevenueAdded.handler: Property not found')
+  ]);
+
+  const propertyTokenRevenues = await Promise.all(event.params.users.map(async (user): Promise<{ user: string, revenue: any }> => {
+      return {
+          user,
+          revenue: await context.PropertyTokenRevenue.getOrCreate(
+              getNewPropertyTokenRevenue(propertyTokenLoaded, user)
+          )
+      };
+  }))
+
+  const propertyTokenRevenuesLoaded = propertyTokenRevenues.reduce((propertyTokenRevenues, { user, revenue }) => {
+      propertyTokenRevenues[user] = revenue;
+      return propertyTokenRevenues;
+  }, {} as { [key: string]: any });
+
+
+    for  (const [index, user] of event.params.users.entries()) {
+        const propertyTokenRevenue = propertyTokenRevenuesLoaded[user];
+
+        context.PropertyTokenRevenue.set({
+          ...propertyTokenRevenue,
+          pendingRevenue:
+              propertyTokenRevenue.pendingRevenue + event.params.amounts[index],
+          });
+    }
+
+      const currentPropertyTokenRevenueDistribution =
+          getNewPropertyTokenRevenueDistribution(
+              propertyTokenLoaded,
+              event.chainId,
+              event.block.timestamp,
+              event.params.users,
+              event.params.amounts,
+              event.params.fromTime,
+              event.params.toTime,
+              propertyTokenRecordsLoaded
+          );
+
+      context.PropertyTokenRevenueDistribution.set(
+          currentPropertyTokenRevenueDistribution
+      );
+
+      const allRevenueDistributions = [
+          ...propertyTokenRevenueDistributionsLoaded,
+          currentPropertyTokenRevenueDistribution,
+      ];
+
+      const { allTimeAPY, currentYearAPY } = getAPY(allRevenueDistributions);
+
+      context.PropertyToken.set({
+          ...propertyTokenLoaded,
+          apy: allTimeAPY,
+          currentYearApy: currentYearAPY,
+      });
+});
+
+PropertyRevenueDistribution.RevenueClaimed.handler(async ({ event, context }) => {
+  // Skip if amount is 0
+  if (event.params.amount === 0n) return;
+
+  const propertyTokenRevenue = await context.PropertyTokenRevenue.getOrThrow(
+    `${event.chainId}-${event.params.property}-${event.params.user}`,
+    'PropertyRevenueDistribution.RevenueClaimed.handler: PropertyTokenRevenue not found'
+  );
+
+    context.PropertyTokenRevenue.set({
+      ...propertyTokenRevenue,
+      pendingRevenue: propertyTokenRevenue.pendingRevenue - event.params.amount,
+      claimedRevenue: propertyTokenRevenue.claimedRevenue + event.params.amount,
+    });
+});

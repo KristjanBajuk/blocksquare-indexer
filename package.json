@@ -1,0 +1,38 @@
+{
+  "name": "bstscan-indexer",
+  "version": "0.1.0",
+  "scripts": {
+    "clean": "tsc --clean",
+    "build": "tsc --build",
+    "watch": "tsc --watch",
+    "mocha": "ts-mocha test/**/*.ts",
+    "codegen": "pnpm run config && envio codegen",
+    "dev": "envio dev",
+    "test": "pnpm mocha",
+    "start": "envio start",
+    "config": "npx dotenvx run -- ts-node ./scripts/render-config-template.ts"
+  },
+  "devDependencies": {
+    "@dotenvx/dotenvx": "^1.51.0",
+    "@types/chai": "^5.2.2",
+    "@types/ejs": "^3.1.5",
+    "@types/mocha": "10.0.10",
+    "@types/node": "24.5.2",
+    "chai": "5.2.1",
+    "ejs": "^3.1.10",
+    "envio": "2.29.1",
+    "ethers": "6.15.0",
+    "mocha": "11.7.2",
+    "ts-mocha": "^11.1.0",
+    "ts-node": "10.9.2",
+    "typescript": "5.9.2"
+  },
+  "dependencies": {
+    "@rapideditor/country-coder": "^5.5.1",
+    "dayjs": "^1.11.18"
+  },
+  "optionalDependencies": {
+    "generated": "./generated"
+  },
+  "packageManager": "pnpm@10.17.1"
+}

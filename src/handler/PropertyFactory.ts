@@ -1,0 +1,37 @@
+import { PropertyFactory } from 'generated';
+import { getNewPropertyToken } from '../helper/PropertyToken';
+
+PropertyFactory.NewPropToken.contractRegister(
+  ({ event, context }) => {
+    context.addPropertyToken(event.params.proptoken);
+  },
+  {
+    preRegisterDynamicContracts: false,
+  }
+);
+
+PropertyFactory.NewPropToken.handler(async ({ event, context }) => {
+  const cpWallet = await context.Wallet.getOrThrow(
+    `${event.chainId}-${event.params.certifiedPartner}`,
+    'PropertyFactory.NewPropToken.handler: Wallet not found'
+  );
+
+  if (!cpWallet.certifiedPartner_id)
+    throw new Error(
+      'PropertyFactory.NewPropToken.handler: Certified Partner ID not found'
+    );
+
+  const propertyTokenLoaded = getNewPropertyToken(
+    event.chainId,
+    event.params.proptoken,
+    cpWallet.certifiedPartner_id,
+    cpWallet.id
+  );
+
+  context.PropertyToken.set({
+    ...propertyTokenLoaded,
+    createdAt: event.block.timestamp,
+    createdAtBlock: event.block.number,
+    creationTransaction: event.transaction.hash,
+  });
+});

@@ -1,0 +1,206 @@
+name: Blocksquare
+preload_handlers: true
+field_selection:
+  transaction_fields:
+    - 'hash'
+    - 'transactionIndex'
+contracts:
+  - name: BlocksquareToken
+    abi_file_path: abis/BlocksquareToken.json
+    handler: src/handler/Token.ts
+    events:
+      - event: Transfer
+  - name: CertifiedPartners
+    abi_file_path: abis/CertifiedPartners.json
+    handler: src/handler/CertifiedPartners.ts
+    events:
+      - event: AddedCertifiedPartner
+      - event: AddedWallet
+      - event: RemovedWallet
+      - event: AddedWhitelisted
+      - event: RemovedWhitelisted
+  - name: DataStorageProxy
+    abi_file_path: abis/DataStorageProxy.json
+    handler: src/handler/DataStorageProxy.ts
+    events:
+      - event: TransferPropertyToCP
+  - name: GovernancePool
+    abi_file_path: abis/GovernancePool.json
+    handler: src/handler/GovernancePool.ts
+    events:
+      - event: Deposit
+      - event: Transfer
+      - event: Withdraw
+      - event: Reward
+  - name: MarketplacePoolFactory
+    abi_file_path: abis/MarketplacePoolFactory.json
+    handler: src/handler/MarketplacePoolFactory.ts
+    events:
+      - event: MarketplacePoolCreated
+  - name: MarketplacePool
+    abi_file_path: abis/MarketplacePool.json
+    handler: src/handler/MarketplacePool.ts
+    events:
+      - event: CPInitialized
+      - event: Deposit
+      - event: Withdraw
+      - event: CPCanWithdraw
+      - event: Capped
+      - event: Reward
+      - event: LockExtended
+      - event: LiquidateCPCollateral
+      - event: PoolCampaignConfigured
+  - name: LiquidityStakingPool
+    abi_file_path: abis/LiquidityStakingPool.json
+    handler: src/handler/LiquidityStakingPool.ts
+    events:
+      - event: Deposit
+      - event: Withdraw
+      - event: Reward
+  - name: OceanpointValuation
+    abi_file_path: abis/OceanpointValuation.json
+    handler: src/handler/OceanpointValuation.ts
+    events:
+      - event: ValuationUpdate
+      - event: APYUpdate
+  - name: PropertyFactory
+    abi_file_path: abis/PropertyFactory.json
+    handler: src/handler/PropertyFactory.ts
+    events:
+      - event: NewPropToken
+  - name: PropertyTokenOffering
+    abi_file_path: abis/PropertyTokenOffering.json
+    handler: src/handler/PropertyTokenOffering.ts
+    events:
+      - event: InitialOffer
+      - event: Invested
+      - event: InitialOfferingCanceled
+      - event: ClaimInvestment
+      - event: ReturnedPresaleInvestment
+      - event: ReturnedInvestment
+  - name: PropertyToken
+    abi_file_path: abis/PropertyToken.json
+    handler: src/handler/PropertyToken.ts
+    events:
+      - event: Transfer
+      - event: CapitalStackChange
+  - name: PropertyRegistry
+    abi_file_path: abis/PropertyRegistry.json
+    handler: src/handler/PropertyRegistry.ts
+    events:
+      - event: IPFSHashChanged
+      - event: NameAndSymbolChange
+      - event: PropertyBasicInfoChanged
+      - event: PropertyInfoAdded
+      - event: PropertyInfoChanged
+      - event: PropertyValuationChange
+      - event: TokenValuationChange
+  - name: PropertyRevenueDistribution
+    abi_file_path: abis/PropertyRevenueDistribution.json
+    handler: src/handler/PropertyRevenueDistribution.ts
+    events:
+      - event: RevenueAdded
+      - event: RevenueClaimed
+  - name: PropertyStakingPool
+    abi_file_path: abis/PropertyStakingPool.json
+    handler: src/handler/PropertyStakingPool.ts
+    events:
+      - event: Deposit
+      - event: Withdraw
+      - event: Reward
+  - name: UniswapPoolV2
+    abi_file_path: abis/UniswapPoolV2.json
+    handler: src/handler/UniswapPoolV2.ts
+    events:
+      - event: Swap
+  - name: Users
+    abi_file_path: abis/Users.json
+    handler: src/handler/Users.ts
+    events:
+      - event: AddedWallet
+      - event: RemovedWallet
+  - name: ZeroEx
+    abi_file_path: abis/ZeroEx.json
+    handler: src/handler/ZeroEx.ts
+    events:
+      - event: LimitOrderFilled
+  # This is used to index mainnet for price feeds
+  - name: PriceFeedRegistry
+    abi_file_path: ./abis/PriceFeedRegistry.json
+    handler: src/handler/PriceFeedRegistryHandler.ts
+    events:
+      - event: FeedConfirmed
+  - name: PriceDataFeed
+    abi_file_path: ./abis/PriceDataFeed.json
+    handler: src/handler/PriceFeedDataHandler.ts
+    events:
+      - event: AnswerUpdated
+unordered_multichain_mode: false
+networks:
+  ### START PRICE FEED SECTION  ###
+  # We fetch the prices of BST and other currencies directly from mainnet as they are not available on testnet
+  # Comment this section out if you want fast sync for testing without fetching prices
+  - id: 1
+    start_block: 0
+    contracts:
+      - name: PriceFeedRegistry
+        address:
+          - 0x47fb2585d2c56fe188d0e6ec628a38b74fceeedf
+      - name: UniswapPoolV2
+        address:
+          # Mainnet BST/ETH pool
+          - 0x0e85fb1be698e777f2185350b4a52e5ee8df51a6
+      - name: PriceDataFeed
+
+  ### END PRICE FEED SECTION ###
+
+  ### START ECOSYSTEM NETWORK SPECIFIC SECTION ###
+  - id: <%= config.chainId %>
+    start_block: <%= config.startBlock %>
+    contracts:
+      - name: BlocksquareToken
+        address:
+          - <%= config.blockSquareTokenAddress %>
+      - name: CertifiedPartners
+        address:
+          - <%= config.certifiedPartnersAddress %>
+      - name: DataStorageProxy
+        address:
+          - <%= config.dataStorageProxyAddress %>
+      - name: GovernancePool
+        address:
+          - <%= config.governancePoolAddress %>
+      - name: LiquidityStakingPool
+        address: [<%= config.jointLiquidityStakingPoolContracts %>]
+      - name: MarketplacePoolFactory
+        address:
+          - <%= config.marketPlacePoolFactoryAddress %>
+      - name: MarketplacePool
+      - name: OceanpointValuation
+        address: [<%= config.jointValuationContracts %>]
+      - name: PropertyToken
+      - name: PropertyTokenOffering
+        address:
+          - <%= config.propertyTokenOfferingAddress %>
+      - name: PropertyFactory
+        address:
+          - <%= config.propertyFactoryAddress %>
+      - name: PropertyRegistry
+        address:
+          - <%= config.propertyRegistryAddress %>
+      - name: PropertyRevenueDistribution
+        address:
+          - <%= config.propertyRevenueDistributionAddress %>
+      - name: PropertyStakingPool
+        address: [<%= config.jointStakingPoolContracts %>]
+      - name: Users
+        address:
+          - <%= config.usersRegistryAddress %>
+      - name: ZeroEx
+        address:
+          - <%= config.zeroExAddress %>
+        start_block: <%= config.zeroExStartBlock %>
+      - name: UniswapPoolV2
+        address: [<%= config.jointUniswapPoolContracts %>]
+
+  ### END ECOSYSTEM NETWORK SPECIFIC SECTION ###
