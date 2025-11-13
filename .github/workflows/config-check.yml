@@ -1,0 +1,75 @@
+name: Config Check
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches:
+      - develop
+      - release
+
+jobs:
+  config-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout PR branch
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.17.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+
+      - name: Install dependencies
+        run: pnpm install
+
+      - name: Determine ENVIO_NETWORK from target branch
+        id: network
+        run: |
+          BASE_REF='${{ github.base_ref }}'
+          if [[ "$BASE_REF" == "release" ]]; then
+            echo "ENVIO_NETWORK=mainnet" >> $GITHUB_ENV
+          else
+            echo "ENVIO_NETWORK=testnet" >> $GITHUB_ENV
+          fi
+
+      - name: Check config.yaml exists
+        id: check_file
+        run: |
+          if [ ! -f config.yaml ]; then
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "❌ config.yaml not found in PR"
+          else
+            echo "exists=true" >> $GITHUB_OUTPUT
+            cp config.yaml config.yaml.committed
+          fi
+
+      - name: Generate expected config
+        run: pnpm run config
+
+      - name: Compare configs
+        if: steps.check_file.outputs.exists == 'true'
+        run: |
+          if ! diff -q config.yaml.committed config.yaml; then
+            echo "❌ config.yaml is out of date. Differences:"
+            diff config.yaml.committed config.yaml || true
+            echo ""
+            echo "Run /generate-config to update it."
+            exit 1
+          fi
+          echo "✅ config.yaml is up to date"
+
+      - name: Fail if config missing
+        if: steps.check_file.outputs.exists == 'false'
+        run: |
+          echo "❌ config.yaml not found. Run /generate-config to create it."
+          exit 1
