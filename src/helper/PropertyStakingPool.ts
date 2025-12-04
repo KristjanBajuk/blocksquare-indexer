@@ -9,6 +9,7 @@ import {
 import { getDay, getHour } from './date';
 import { getLoadedConfig } from '../config';
 import { PropertyStakingPool } from 'generated/src/Types.gen';
+import { PropertyStakingPoolType } from '../types/enums';
 export const getNewPropertyStakingPool = (
   chainId: number,
   poolId: string
@@ -120,4 +121,18 @@ export function getStakingPoolAddressFromValuationAddress(
   if (!stakingPoolAddress) throw new Error('Staking pool address not found');
 
   return stakingPoolAddress;
+}
+
+export function getStakingPoolTypeFromValuationAddress(
+    valuationAddress: string
+): PropertyStakingPoolType {
+    const valuationAddressFormatted = getAddress(valuationAddress);
+
+    const stakingPoolType = getLoadedConfig().propertyStakingContracts.find(
+        (contract) => contract.valuationAddress === valuationAddressFormatted
+    )?.type;
+
+    if (!stakingPoolType) throw new Error('Staking pool type not found');
+
+    return stakingPoolType;
 }
