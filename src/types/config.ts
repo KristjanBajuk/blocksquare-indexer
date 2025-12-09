@@ -18,7 +18,7 @@ export type Config = {
   propertyStakingContracts: Array<{
     address: string;
     valuationAddress: string;
-    type?: PropertyStakingPoolType;
+    type: PropertyStakingPoolType;
   }>;
   uniswapPoolContracts: Array<{
     assetPairId: string;
