@@ -27,14 +27,18 @@ PropertyRevenueDistribution.RevenueAdded.handler(async ({ event, context }) => {
   }, {} as { [key: string]: any });
 
 
-    for  (const [index, user] of event.params.users.entries()) {
-        const propertyTokenRevenue = propertyTokenRevenuesLoaded[user];
+    // There can be multiple entries for the same user. We need to aggregate all the amounts for the same user.
+    const aggregatedPendingRevenues = event.params.users.reduce<Record<string, bigint>>((acc, user, index) => {
+        acc[user] = (acc[user] ?? 0n) + event.params.amounts[index];
+        return acc;
+    }, {});
 
+    for (const [user, totalPendingRevenue] of Object.entries(aggregatedPendingRevenues)) {
+        const propertyTokenRevenue = propertyTokenRevenuesLoaded[user];
         context.PropertyTokenRevenue.set({
           ...propertyTokenRevenue,
-          pendingRevenue:
-              propertyTokenRevenue.pendingRevenue + event.params.amounts[index],
-          });
+          pendingRevenue: propertyTokenRevenue.pendingRevenue + totalPendingRevenue,
+        });
     }
 
       const currentPropertyTokenRevenueDistribution =
