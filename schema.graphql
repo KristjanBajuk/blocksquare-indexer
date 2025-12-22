@@ -155,6 +155,7 @@ type PropertyTokenOffering {
 
 type PropertyTokenRevenueDistribution {
   id: ID!
+  blockTimestamp: Int!
   chainId: Int!
   propertyToken: PropertyToken!
   amounts: [BigInt!]!
