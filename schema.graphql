@@ -9,6 +9,13 @@ type Global {
   activePropertiesCountryCount: Int!
 }
 
+enum PropertyStakingPoolType {
+    COMMUNITY
+    ISSUER
+    RWA
+    LANDHIVE
+}
+
 ### Price Tracking ###
 
 type AssetPairPrice @entity {
@@ -304,6 +311,7 @@ type OceanpointTokenInformation {
   chainId: Int!
   propertyToken: PropertyToken!
   propertyStakingPool: PropertyStakingPool!
+  propertyStakingPoolType: PropertyStakingPoolType!
   propertyStakingPoolPositions: [PropertyStakingPoolPosition!]!
     @derivedFrom(field: "tokenInformation")
   valuation: BigInt!
