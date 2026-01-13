@@ -1,4 +1,5 @@
 import { Dayjs } from "dayjs";
+import { PropertyStakingPoolType } from "./enums";
 
 export type Config = {
   chainId: number;
@@ -17,6 +18,7 @@ export type Config = {
   propertyStakingContracts: Array<{
     address: string;
     valuationAddress: string;
+    type: PropertyStakingPoolType;
   }>;
   uniswapPoolContracts: Array<{
     assetPairId: string;

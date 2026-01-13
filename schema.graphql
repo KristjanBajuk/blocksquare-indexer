@@ -9,6 +9,13 @@ type Global {
   activePropertiesCountryCount: Int!
 }
 
+enum PropertyStakingPoolType {
+    COMMUNITY
+    ISSUER
+    RWA
+    LANDHIVE
+}
+
 ### Price Tracking ###
 
 type AssetPairPrice @entity {
@@ -85,6 +92,7 @@ type PropertyToken {
   totalValueTraded: BigInt!
   transfers: [PropertyTokenTransfer!]! @derivedFrom(field: "propertyToken")
   pendingRevenues: [PropertyTokenRevenue!]! @derivedFrom(field: "propertyToken")
+  revenueClaims: [PropertyTokenRevenueClaim!]! @derivedFrom(field: "propertyToken")
   revenueDistributions: [PropertyTokenRevenueDistribution!]!
     @derivedFrom(field: "propertyToken")
   records: [PropertyTokenRecord!]! @derivedFrom(field: "propertyToken")
@@ -155,6 +163,7 @@ type PropertyTokenOffering {
 
 type PropertyTokenRevenueDistribution {
   id: ID!
+  blockTimestamp: Int!
   chainId: Int!
   propertyToken: PropertyToken!
   amounts: [BigInt!]!
@@ -173,6 +182,17 @@ type PropertyTokenRevenue {
   wallet: Wallet!
   pendingRevenue: BigInt!
   claimedRevenue: BigInt!
+}
+
+type PropertyTokenRevenueClaim {
+  id: ID!
+  chainId: Int!
+  transactionHash: Bytes!
+  blockNumber: Int!
+  blockTimestamp: Int!
+  propertyToken: PropertyToken!
+  wallet: Wallet!
+  amount: BigInt!
 }
 
 type PropertyTokenTrade {
@@ -272,6 +292,7 @@ type Wallet {
     @derivedFrom(field: "to")
   propertyInvestments: [PropertyTokenInvestment!]! @derivedFrom(field: "wallet")
   pendingRevenues: [PropertyTokenRevenue!]! @derivedFrom(field: "wallet")
+  revenueClaims: [PropertyTokenRevenueClaim!]! @derivedFrom(field: "wallet")
 }
 
 ### Oceanpoint ###
@@ -305,6 +326,7 @@ type OceanpointTokenInformation {
   chainId: Int!
   propertyToken: PropertyToken!
   propertyStakingPool: PropertyStakingPool!
+  propertyStakingPoolType: PropertyStakingPoolType!
   propertyStakingPoolPositions: [PropertyStakingPoolPosition!]!
     @derivedFrom(field: "tokenInformation")
   valuation: BigInt!
