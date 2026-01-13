@@ -190,6 +190,8 @@ type PropertyTokenTrade {
   takerTokenFilledAmount: BigInt!
   makerTokenFilledAmount: BigInt!
   propertyValuation: BigInt!
+  "Protocol source: '0x' for 0x Protocol, '1inch' for 1inch Aggregation Router"
+  protocol: String!
 }
 
 type PropertyTokenTradeCounts {

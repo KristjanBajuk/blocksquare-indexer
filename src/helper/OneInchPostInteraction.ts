@@ -1,4 +1,6 @@
 import { PropertyTokenTradeCounts } from 'generated';
+import {getAddress} from "ethers";
+
 
 export const getNewPropertyTokenTradeCounts = (
     chainId: number,
