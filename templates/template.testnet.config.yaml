@@ -208,7 +208,6 @@ networks:
       - name: OneInchPostInteraction
         address:
           - <%= config.oneInchPostInteractionAddress %>
-        start_block: <%= config.oneInchAggregationRouterV6StartBlock %>
       - name: UniswapPoolV2
         address: [<%= config.jointUniswapPoolContracts %>]
 
