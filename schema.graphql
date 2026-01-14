@@ -9,6 +9,11 @@ type Global {
   activePropertiesCountryCount: Int!
 }
 
+enum LimitOrderProtocol {
+    ZeroEx
+    OneInch
+}
+
 ### Price Tracking ###
 
 type AssetPairPrice @entity {
@@ -190,8 +195,7 @@ type PropertyTokenTrade {
   takerTokenFilledAmount: BigInt!
   makerTokenFilledAmount: BigInt!
   propertyValuation: BigInt!
-  "Protocol source: '0x' for 0x Protocol, '1inch' for 1inch Aggregation Router"
-  protocol: String!
+  protocol: LimitOrderProtocol!
 }
 
 type PropertyTokenTradeCounts {

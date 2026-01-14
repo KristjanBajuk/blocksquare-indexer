@@ -28,7 +28,7 @@ ZeroEx.LimitOrderFilled.handler(async ({ event, context }) => {
     takerTokenFilledAmount: event.params.takerTokenFilledAmount,
     makerTokenFilledAmount: event.params.makerTokenFilledAmount,
     propertyValuation: propertyToken.propertyValuation,
-    protocol: '0x',
+    protocol: 'ZeroEx',
   });
 
   // Handle case where property token is on maker side (being sold)
