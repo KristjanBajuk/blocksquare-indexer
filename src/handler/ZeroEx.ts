@@ -1,5 +1,6 @@
 import { ZeroEx } from 'generated';
 import { updatePropertyTokenTradeCounts } from '../helper/LimitOrderTrades';
+import {LimitOrderProtocol} from "../types/enums";
 
 ZeroEx.LimitOrderFilled.handler(async ({ event, context }) => {
   // Check if either makerToken or takerToken is a property token
@@ -28,7 +29,7 @@ ZeroEx.LimitOrderFilled.handler(async ({ event, context }) => {
     takerTokenFilledAmount: event.params.takerTokenFilledAmount,
     makerTokenFilledAmount: event.params.makerTokenFilledAmount,
     propertyValuation: propertyToken.propertyValuation,
-    protocol: 'ZeroEx',
+    protocol: LimitOrderProtocol.ZeroEx,
   });
 
   // Handle case where property token is on maker side (being sold)
