@@ -419,6 +419,8 @@ type MarketplacePool {
   vAmount: BigInt!
   positions: [MarketplacePoolPosition!]! @derivedFrom(field: "pool")
   stats: [MarketplacePoolRecord!]! @derivedFrom(field: "pool")
+  isCpCollateralLiquidated: Boolean!
+  cpCollateralLiquidatedAt: Int!
 }
 
 type MarketplacePoolPosition {
