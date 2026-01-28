@@ -16,6 +16,11 @@ enum PropertyStakingPoolType {
     LANDHIVE
 }
 
+enum LimitOrderProtocol {
+    ZeroEx
+    OneInch
+}
+
 ### Price Tracking ###
 
 type AssetPairPrice @entity {
@@ -210,6 +215,7 @@ type PropertyTokenTrade {
   takerTokenFilledAmount: BigInt!
   makerTokenFilledAmount: BigInt!
   propertyValuation: BigInt!
+  protocol: LimitOrderProtocol!
 }
 
 type PropertyTokenTradeCounts {
