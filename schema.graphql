@@ -46,6 +46,14 @@ type AssetPair @entity {
   prices: [AssetPairPrice!]! @derivedFrom(field: "assetPair")
 }
 
+type UniswapV2Pool {
+  id: ID!          # pool contract address
+  assetPairId: String!
+  totalSupply: BigInt!
+  reserve0: BigInt!
+  reserve1: BigInt!
+}
+
 ### Marketplace ###
 
 # This is usually a marketplace operator

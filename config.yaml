@@ -2,6 +2,7 @@
 ### Edit the template.config.yaml file in the root of the project and run `npm run codegen` to update this file ###
 name: Blocksquare
 preload_handlers: true
+unordered_multichain_mode: true
 field_selection:
   transaction_fields:
     - 'hash'
@@ -115,6 +116,8 @@ contracts:
     handler: src/handler/UniswapPoolV2.ts
     events:
       - event: Swap
+      - event: Sync
+      - event: Transfer
   - name: Users
     abi_file_path: abis/Users.json
     handler: src/handler/Users.ts
@@ -155,7 +158,6 @@ contracts:
     handler: src/handler/PriceFeedDataHandler.ts
     events:
       - event: AnswerUpdated
-unordered_multichain_mode: false
 networks:
   ### START PRICE FEED SECTION  ###
   # We fetch the prices of BST and other currencies directly from mainnet as they are not available on testnet
