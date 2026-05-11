@@ -1,7 +1,7 @@
 import { BlocksquareToken } from 'generated';
 
 import { ZeroAddress, formatUnits } from 'ethers';
-import { getNewToken, getNewTokenHolder, getTokenRecord } from '../helper/Token';
+import { getNewToken, getNewTokenHolder, getTokenHolderRecord, getTokenRecord } from '../helper/Token';
 import { DEAD_ADDRESS } from '../helper/constants';
 import { BigDecimal } from 'generated';
 import { formatTo8Decimals } from '../helper/format';
@@ -51,6 +51,9 @@ BlocksquareToken.Transfer.handler(async ({ event, context }) => {
         amount: newAmount,
       });
     }
+    context.TokenHolderRecord.set(
+      getTokenHolderRecord(event.chainId, event.srcAddress, event.params._from, newAmount, tokenUpdated, event),
+    );
   }
 
   // Burn
@@ -69,10 +72,14 @@ BlocksquareToken.Transfer.handler(async ({ event, context }) => {
       tokenUpdated.totalHolders = tokenUpdated.totalHolders + 1;
     }
 
+    const newToAmount = toTokenHolder.amount + event.params._amount;
     context.TokenHolder.set({
       ...toTokenHolder,
-      amount: toTokenHolder.amount + event.params._amount,
+      amount: newToAmount,
     });
+    context.TokenHolderRecord.set(
+      getTokenHolderRecord(event.chainId, event.srcAddress, event.params._to, newToAmount, tokenUpdated, event),
+    );
   }
 
   if (bstUsdAssetPair) {

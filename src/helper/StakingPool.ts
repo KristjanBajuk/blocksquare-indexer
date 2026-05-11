@@ -8,6 +8,7 @@ import {
   LiquidityStakingPool_Withdraw_eventArgs,
   StakingPool,
   StakingPoolPosition,
+  StakingPoolPositionRecord,
   StakingPoolRecord,
   eventLog,
   handlerContext,
@@ -53,6 +54,31 @@ export const calculatePoolRatio = (pool: StakingPool): BigDecimal => {
   const ratio = BigDecimal(pool.currentAmount.toString()).div(pool.issuedAmount.toString());
 
   return ratio;
+};
+
+export const getStakingPoolPositionRecord = (
+  chainId: number,
+  poolAddress: string,
+  walletAddress: string,
+  issuedAmount: bigint,
+  ratio: BigDecimal,
+  event: {
+    transaction: { hash: string };
+    logIndex: number;
+    block: { timestamp: number; number: number };
+  },
+): StakingPoolPositionRecord => {
+  return {
+    id: `${chainId}-${poolAddress}-${walletAddress}-${event.transaction.hash}-${event.logIndex}`,
+    chainId,
+    pool_id: `${chainId}-${poolAddress}`,
+    walletAddress,
+    issuedAmount,
+    ratio,
+    blockTimestamp: event.block.timestamp,
+    blockNumber: event.block.number,
+    transactionHash: event.transaction.hash,
+  };
 };
 
 export const getStakingPoolRecord = (pool: StakingPool, timestamp: number): StakingPoolRecord => {
@@ -119,12 +145,16 @@ export const StakingDepositHandler = async (
     ? Number(tempLockedUntil)
     : event.block.timestamp + TWO_DAYS_IN_SECONDS;
 
+  const newIssuedAmount = stakingPoolPosition.issuedAmount + event.params.outAmount;
   context.StakingPoolPosition.set({
     ...stakingPoolPosition,
     stakedAmount: stakingPoolPosition.stakedAmount + event.params.inAmount,
-    issuedAmount: stakingPoolPosition.issuedAmount + event.params.outAmount,
+    issuedAmount: newIssuedAmount,
     lockedUntil,
   });
+  context.StakingPoolPositionRecord.set(
+    getStakingPoolPositionRecord(event.chainId, event.srcAddress, event.params.owner, newIssuedAmount, newStakingPoolData.ratio, event),
+  );
 };
 
 export const StakingRewardHandler = async (
@@ -180,11 +210,17 @@ export const StakingWithdrawHandler = async (
 
   if (newIssuedAmount === 0n || newStakedAmount === 0n) {
     context.StakingPoolPosition.deleteUnsafe(stakingPoolPositionId);
+    context.StakingPoolPositionRecord.set(
+      getStakingPoolPositionRecord(event.chainId, event.srcAddress, event.params.owner, 0n, newStakingPoolData.ratio, event),
+    );
   } else {
     context.StakingPoolPosition.set({
       ...stakingPoolPosition,
       issuedAmount: newIssuedAmount,
       stakedAmount: newStakedAmount,
     });
+    context.StakingPoolPositionRecord.set(
+      getStakingPoolPositionRecord(event.chainId, event.srcAddress, event.params.owner, newIssuedAmount, newStakingPoolData.ratio, event),
+    );
   }
 };
