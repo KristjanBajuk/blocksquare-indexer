@@ -22,7 +22,7 @@ PropertyRevenueDistribution.RevenueAdded.handler(async ({ event, context }) => {
       return {
         user,
         revenue: await context.PropertyTokenRevenue.getOrCreate(
-          getNewPropertyTokenRevenue(propertyTokenLoaded, user),
+          getNewPropertyTokenRevenue(propertyTokenLoaded, user, event.srcAddress),
         ),
       };
     }),
@@ -53,16 +53,17 @@ PropertyRevenueDistribution.RevenueAdded.handler(async ({ event, context }) => {
     });
   }
 
-  const currentPropertyTokenRevenueDistribution = getNewPropertyTokenRevenueDistribution(
-    propertyTokenLoaded,
-    event.chainId,
-    event.block.timestamp,
-    event.params.users,
-    event.params.amounts,
-    event.params.fromTime,
-    event.params.toTime,
-    propertyTokenRecordsLoaded,
-  );
+  const currentPropertyTokenRevenueDistribution = getNewPropertyTokenRevenueDistribution({
+    propertyToken: propertyTokenLoaded,
+    chainId: event.chainId,
+    blockTimestamp: event.block.timestamp,
+    contractAddress: event.srcAddress,
+    users: event.params.users,
+    amounts: event.params.amounts,
+    fromTime: event.params.fromTime,
+    toTime: event.params.toTime,
+    tokenRecords: propertyTokenRecordsLoaded,
+  });
 
   context.PropertyTokenRevenueDistribution.set(currentPropertyTokenRevenueDistribution);
 
@@ -85,7 +86,7 @@ PropertyRevenueDistribution.RevenueClaimed.handler(async ({ event, context }) =>
   if (event.params.amount === 0n) return;
 
   const propertyTokenRevenue = await context.PropertyTokenRevenue.getOrThrow(
-    `${event.chainId}-${event.params.property}-${event.params.user}`,
+    `${event.chainId}-${event.params.property}-${event.srcAddress}-${event.params.user}`,
     'PropertyRevenueDistribution.RevenueClaimed.handler: PropertyTokenRevenue not found',
   );
 
@@ -99,16 +100,17 @@ PropertyRevenueDistribution.RevenueClaimed.handler(async ({ event, context }) =>
   const propertyTokenId = `${event.chainId}-${event.params.property}`;
   const walletId = `${event.chainId}-${event.params.user}`;
 
-  const revenueClaim = getNewPropertyTokenRevenueClaim(
-    event.chainId,
-    event.transaction.hash,
-    event.block.number,
-    event.block.timestamp,
-    event.logIndex,
+  const revenueClaim = getNewPropertyTokenRevenueClaim({
+    chainId: event.chainId,
+    contractAddress: event.srcAddress,
+    transactionHash: event.transaction.hash,
+    blockNumber: event.block.number,
+    blockTimestamp: event.block.timestamp,
+    logIndex: event.logIndex,
     propertyTokenId,
     walletId,
-    event.params.amount,
-  );
+    amount: event.params.amount,
+  });
 
   context.PropertyTokenRevenueClaim.set(revenueClaim);
 });

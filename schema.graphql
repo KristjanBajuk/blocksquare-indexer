@@ -187,6 +187,7 @@ type PropertyTokenRevenueDistribution {
   id: ID!
   blockTimestamp: Int!
   chainId: Int!
+  contractAddress: String!
   propertyToken: PropertyToken!
   amounts: [BigInt!]!
   totalAmount: BigInt!
@@ -200,6 +201,7 @@ type PropertyTokenRevenueDistribution {
 type PropertyTokenRevenue {
   id: ID!
   chainId: Int!
+  contractAddress: String!
   propertyToken: PropertyToken!
   wallet: Wallet!
   pendingRevenue: BigInt!
@@ -209,6 +211,7 @@ type PropertyTokenRevenue {
 type PropertyTokenRevenueClaim {
   id: ID!
   chainId: Int!
+  contractAddress: String!
   transactionHash: Bytes!
   blockNumber: Int!
   blockTimestamp: Int!
