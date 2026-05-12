@@ -2,16 +2,27 @@ import { PropertyTokenRevenueDistribution } from 'generated';
 import { PropertyToken, propertyTokenRecord } from 'generated/src/Types.gen';
 import { normalizeTimestampToSeconds } from './time';
 
-export const getNewPropertyTokenRevenueDistribution = (
-  propertyToken: PropertyToken,
-  chainId: number,
-  blockTimestamp: number,
-  users: string[],
-  amounts: bigint[],
-  fromTime: bigint,
-  toTime: bigint,
-  tokenRecords: propertyTokenRecord[],
-): PropertyTokenRevenueDistribution => {
+export const getNewPropertyTokenRevenueDistribution = ({
+  propertyToken,
+  chainId,
+  blockTimestamp,
+  contractAddress,
+  users,
+  amounts,
+  fromTime,
+  toTime,
+  tokenRecords,
+}: {
+  propertyToken: PropertyToken;
+  chainId: number;
+  blockTimestamp: number;
+  contractAddress: string;
+  users: string[];
+  amounts: bigint[];
+  fromTime: bigint;
+  toTime: bigint;
+  tokenRecords: propertyTokenRecord[];
+}): PropertyTokenRevenueDistribution => {
   //Get total supply and property valuation for the period of the distribution instead of the current time
   const { totalSupply, propertyValuation } = getSupplyAndValuationForPeriod(
     normalizeTimestampToSeconds(Number(fromTime)),
@@ -20,9 +31,10 @@ export const getNewPropertyTokenRevenueDistribution = (
   );
 
   return {
-    id: `${propertyToken.id}-${blockTimestamp}`,
+    id: `${propertyToken.id}-${contractAddress}-${blockTimestamp}`,
     blockTimestamp: blockTimestamp,
     chainId,
+    contractAddress,
     users: users,
     amounts: amounts,
     totalAmount: amounts.reduce((a, b) => a + b, 0n),

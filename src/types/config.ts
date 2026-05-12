@@ -15,6 +15,7 @@ export type Config = {
   propertyFactoryAddress: string;
   propertyRegistryAddress: string;
   propertyRevenueDistributionAddress: string;
+  legacyPropertyRevenueDistributionAddress?: string;
   propertyStakingContracts: Array<{
     address: string;
     valuationAddress: string;
@@ -25,7 +26,7 @@ export type Config = {
     address: string;
   }>;
   propertyTokenOfferingAddress: string;
-  propertyTokenOfferingV2Address: string;
+  propertyTokenOfferingV2Address: string | null;
   uniswapWethDaiPoolAddress: string;
   usersRegistryAddress: string;
   zeroExAddress: string;
