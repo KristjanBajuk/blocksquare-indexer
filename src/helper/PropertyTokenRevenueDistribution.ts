@@ -1,5 +1,4 @@
-import { PropertyTokenRevenueDistribution } from 'generated';
-import { PropertyToken, propertyTokenRecord } from 'generated/src/Types.gen';
+import type { PropertyToken, PropertyTokenRecord, PropertyTokenRevenueDistribution } from 'envio';
 import { normalizeTimestampToSeconds } from './time';
 
 export const getNewPropertyTokenRevenueDistribution = ({
@@ -17,11 +16,11 @@ export const getNewPropertyTokenRevenueDistribution = ({
   chainId: number;
   blockTimestamp: number;
   contractAddress: string;
-  users: string[];
-  amounts: bigint[];
+  users: readonly string[];
+  amounts: readonly bigint[];
   fromTime: bigint;
   toTime: bigint;
-  tokenRecords: propertyTokenRecord[];
+  tokenRecords: PropertyTokenRecord[];
 }): PropertyTokenRevenueDistribution => {
   //Get total supply and property valuation for the period of the distribution instead of the current time
   const { totalSupply, propertyValuation } = getSupplyAndValuationForPeriod(

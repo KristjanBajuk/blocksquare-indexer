@@ -1,5 +1,4 @@
 name: Blocksquare
-preload_handlers: true
 field_selection:
   transaction_fields:
     - 'hash'
@@ -139,7 +138,7 @@ contracts:
     handler: src/handler/PriceFeedDataHandler.ts
     events:
       - event: AnswerUpdated
-networks:
+chains:
   - id: <%= config.chainId %>
     start_block: <%= config.startBlock %>
     contracts:

@@ -1,5 +1,4 @@
 name: Blocksquare
-preload_handlers: true
 field_selection:
   transaction_fields:
     - 'hash'
@@ -153,8 +152,7 @@ contracts:
     handler: src/handler/PriceFeedDataHandler.ts
     events:
       - event: AnswerUpdated
-unordered_multichain_mode: false
-networks:
+chains:
   ### START PRICE FEED SECTION  ###
   # We fetch the prices of BST and other currencies directly from mainnet as they are not available on testnet
   # Comment this section out if you want fast sync for testing without fetching prices

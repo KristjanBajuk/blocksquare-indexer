@@ -1,8 +1,8 @@
-import { ZeroEx } from 'generated';
+import { indexer } from 'envio';
 import { updatePropertyTokenTradeCounts } from '../helper/LimitOrderTrades';
 import { LimitOrderProtocol } from '../types/enums';
 
-ZeroEx.LimitOrderFilled.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: 'ZeroEx', event: 'LimitOrderFilled' }, async ({ event, context }) => {
   // Check if either makerToken or takerToken is a property token
   const [makerPropertyToken, takerPropertyToken] = await Promise.all([
     context.PropertyToken.get(`${event.chainId}-${event.params.makerToken}`),

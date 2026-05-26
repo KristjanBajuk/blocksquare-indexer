@@ -1,5 +1,5 @@
 import { getAddress } from 'ethers';
-import { Config } from '../types/config';
+import type { Config } from '../types/config';
 import { PropertyStakingPoolType } from '../types/enums';
 
 export const testnetConfig: Config = {
@@ -19,7 +19,9 @@ export const testnetConfig: Config = {
   propertyFactoryAddress: getAddress('0x67b899af3f27072f15f22bb33e5f1df2696cafcb'),
   propertyRegistryAddress: getAddress('0x0be43cfd32a91cc277489b547598b6428ef9a584'),
   propertyRevenueDistributionAddress: getAddress('0x1e5aA46E7AB0369a1f047A345A44164F6562Bb4C'),
-  legacyPropertyRevenueDistributionAddress: getAddress('0xbc9bf93d96096F42364DBD2c2b32a317fd06C8cB'),
+  legacyPropertyRevenueDistributionAddress: getAddress(
+    '0xbc9bf93d96096F42364DBD2c2b32a317fd06C8cB',
+  ),
   propertyStakingContracts: [
     // Community Staking Pool
     {

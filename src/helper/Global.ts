@@ -1,8 +1,16 @@
-import { Global, GlobalRecord } from 'generated';
+import type { GlobalRecord, PropertyToken } from 'envio';
 import { getDay, getHour } from './date';
-import { PropertyToken } from 'generated/src/Types.gen';
 
-export const getGlobalRecord = (global: Global, timestamp: number): GlobalRecord => {
+// Local entity type for Global — avoids naming conflict with the envio framework's
+// `interface Global { config }` augmentation which shadows the entity type alias.
+export type GlobalEntity = {
+  readonly id: string;
+  readonly activePropertiesCount: number;
+  readonly activePropertiesTotalValuation: bigint;
+  readonly activePropertiesCountryCount: number;
+};
+
+export const getGlobalRecord = (global: GlobalEntity, timestamp: number): GlobalRecord => {
   const { id: hourId, start: hourStart } = getHour(timestamp);
   const { start: dayStart } = getDay(timestamp);
 
@@ -16,7 +24,7 @@ export const getGlobalRecord = (global: Global, timestamp: number): GlobalRecord
   };
 };
 
-export const INITIAL_GLOBAL_ENTITY = {
+export const INITIAL_GLOBAL_ENTITY: GlobalEntity = {
   id: '0',
   activePropertiesCount: 0,
   activePropertiesTotalValuation: 0n,
@@ -24,10 +32,10 @@ export const INITIAL_GLOBAL_ENTITY = {
 };
 
 export const updateGlobalPropertiesCountAndValuation = (
-  currentGlobalEntity: Global,
+  currentGlobalEntity: GlobalEntity,
   activeProperties: PropertyToken[],
   updatedProperty: PropertyToken,
-): Global => {
+): GlobalEntity => {
   // Create a copy to avoid mutating the input array
   const updatedActiveProperties = [...activeProperties];
 

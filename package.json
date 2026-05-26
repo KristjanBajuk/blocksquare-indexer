@@ -5,37 +5,33 @@
     "clean": "tsc --clean",
     "build": "tsc --build",
     "watch": "tsc --watch",
-    "mocha": "ts-mocha test/**/*.ts",
     "codegen": "pnpm run config && envio codegen",
     "dev": "envio dev",
-    "test": "pnpm mocha",
+    "test": "vitest run",
     "start": "envio start",
-    "config": "npx dotenvx run --convention nextjs -- ts-node ./scripts/render-config-template.ts",
+    "config": "npx dotenvx run --convention nextjs -- tsx ./scripts/render-config-template.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
   "devDependencies": {
-    "@dotenvx/dotenvx": "^1.51.1",
-    "@types/chai": "^5.2.3",
-    "@types/ejs": "^3.1.5",
-    "@types/mocha": "10.0.10",
-    "@types/node": "24.10.1",
-    "chai": "5.2.1",
-    "ejs": "^3.1.10",
-    "envio": "2.32.2",
+    "@dotenvx/dotenvx": "1.51.1",
+    "@types/ejs": "3.1.5",
+    "@types/node": "24.12.2",
+    "ejs": "3.1.10",
+    "envio": "3.0.2",
     "ethers": "6.15.0",
-    "mocha": "11.7.5",
-    "prettier": "^3.8.1",
-    "ts-mocha": "^11.1.0",
-    "ts-node": "10.9.2",
-    "typescript": "5.9.3"
+    "prettier": "3.8.1",
+    "tsx": "4.21.0",
+    "typescript": "6.0.3",
+    "vitest": "4.0.16"
   },
   "dependencies": {
     "@rapideditor/country-coder": "^5.6.0",
     "dayjs": "^1.11.19"
   },
-  "optionalDependencies": {
-    "generated": "./generated"
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
   },
   "packageManager": "pnpm@10.17.1"
 }

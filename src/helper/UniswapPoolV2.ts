@@ -1,7 +1,7 @@
 import { getDay, getHour } from './date';
 import { formatTo8Decimals } from './format';
-import { AssetPairPrice, BigDecimal } from 'generated';
-import { AssetPair } from 'generated';
+import { BigDecimal } from 'envio';
+import type { AssetPair, AssetPairPrice } from 'envio';
 
 /**
  * Generic function to calculate and store USD price for any BST/TOKEN pair

@@ -1,6 +1,6 @@
 import fs from 'fs';
 import ejs from 'ejs';
-import { Config } from '../src/types/config';
+import type { Config } from '../src/types/config';
 import { getLoadedConfig } from '../src/config';
 
 type ConfigOverride = Config & {

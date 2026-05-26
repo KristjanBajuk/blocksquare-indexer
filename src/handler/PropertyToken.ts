@@ -1,4 +1,4 @@
-import { PropertyToken } from 'generated';
+import { indexer } from 'envio';
 import { ZeroAddress } from 'ethers';
 import {
   calculateWeightedNAVDeviation,
@@ -7,7 +7,7 @@ import {
 } from '../helper/PropertyToken';
 import { getNewWallet } from '../helper/Wallet';
 
-PropertyToken.Transfer.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: 'PropertyToken', event: 'Transfer' }, async ({ event, context }) => {
   // Skip if value is 0
   if (event.params.value === 0n) return;
 
@@ -123,17 +123,20 @@ PropertyToken.Transfer.handler(async ({ event, context }) => {
   });
 });
 
-PropertyToken.CapitalStackChange.handler(async ({ event, context }) => {
-  context.PropertyTokenCapitalStack.set({
-    id: `${event.chainId}-${event.srcAddress}-${event.logIndex}`,
-    chainId: event.chainId,
-    timestamp: event.block.timestamp,
-    property_id: `${event.chainId}-${event.srcAddress}`,
-    tokenizationAmount: event.params.tokenizationAmount,
-    commonEquity: event.params.commonEquity,
-    preferredEquity: event.params.preferredEquity,
-    mezzanine: event.params.mezzanine,
-    juniorDebt: event.params.juniorDebt,
-    seniorDebt: event.params.seniorDebt,
-  });
-});
+indexer.onEvent(
+  { contract: 'PropertyToken', event: 'CapitalStackChange' },
+  async ({ event, context }) => {
+    context.PropertyTokenCapitalStack.set({
+      id: `${event.chainId}-${event.srcAddress}-${event.logIndex}`,
+      chainId: event.chainId,
+      timestamp: event.block.timestamp,
+      property_id: `${event.chainId}-${event.srcAddress}`,
+      tokenizationAmount: event.params.tokenizationAmount,
+      commonEquity: event.params.commonEquity,
+      preferredEquity: event.params.preferredEquity,
+      mezzanine: event.params.mezzanine,
+      juniorDebt: event.params.juniorDebt,
+      seniorDebt: event.params.seniorDebt,
+    });
+  },
+);

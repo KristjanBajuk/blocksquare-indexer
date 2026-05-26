@@ -1,4 +1,4 @@
-import { PropertyTokenRevenueClaim } from 'generated';
+import type { PropertyTokenRevenueClaim } from 'envio';
 
 export const getNewPropertyTokenRevenueClaim = ({
   chainId,
