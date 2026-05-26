@@ -18,7 +18,7 @@ export const testnetConfig: Config = {
   marketPlacePoolFactoryAddress: getAddress('0x3a0ad3e022e9cc53a75ea8c4907b6e326a615504'),
   propertyFactoryAddress: getAddress('0x67b899af3f27072f15f22bb33e5f1df2696cafcb'),
   propertyRegistryAddress: getAddress('0x0be43cfd32a91cc277489b547598b6428ef9a584'),
-  propertyRevenueDistributionAddress: getAddress('0x1e5aA46E7AB0369a1f047A345A44164F6562Bb4C'),
+  propertyRevenueDistributionAddress: getAddress('0x2fbCff66275e193CfFB6dB6e18278B4A64d74D8f'),
   legacyPropertyRevenueDistributionAddress: getAddress('0xbc9bf93d96096F42364DBD2c2b32a317fd06C8cB'),
   propertyStakingContracts: [
     // Community Staking Pool
@@ -42,7 +42,7 @@ export const testnetConfig: Config = {
     },
   ],
   propertyTokenOfferingAddress: getAddress('0x223ad3ac5df27f8e062a805a04996f00f1feaceb'),
-  propertyTokenOfferingV2Address: getAddress('0x14A08726eb76922c289ff5dAEDba7099Dd7Bfd79'),
+  propertyTokenOfferingV2Address: getAddress('0xD7C0593cfF0221E0Aae4E466D79C9AC4f5a160fa'),
   uniswapPoolContracts: [
     {
       assetPairId: 'BST/POINT',
