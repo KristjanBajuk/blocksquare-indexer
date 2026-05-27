@@ -5,7 +5,11 @@ import { LimitOrderProtocol } from '../types/enums';
 indexer.onEvent(
   { contract: 'OneInchPostInteraction', event: 'PostInteractionOrderFilled' },
   async ({ event, context }) => {
-    // In V3, order struct uses named fields (makerAsset, takerAsset, maker are uint256/bigint)
+    // The 1inch Order struct fields (makerAsset, takerAsset, maker) are ABI-typed as uint256
+    // but semantically hold packed addresses. In V2, Envio decoded tuples as positional arrays
+    // requiring index constants (ORDER_STRUCT_INDEX.MAKER_ASSET). In V3, Solidity struct
+    // components are decoded as named objects, so we access fields directly by name.
+    // See: https://docs.envio.dev/docs/HyperIndex/whats-new-in-v3#better-tuples-developer-experience
     const makerToken = uint256ToAddress(event.params.order.makerAsset);
     const takerToken = uint256ToAddress(event.params.order.takerAsset);
     const maker = uint256ToAddress(event.params.order.maker);
