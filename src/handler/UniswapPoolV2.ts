@@ -7,25 +7,13 @@ import { getAssetPairData, getNewAssetPairPrice, getNewUniswapV2Pool, getLPAsset
 
 const config = getLoadedConfig();
 
-// Recent anchor: block 25028441 = Unix 1777979735 (2026-05-05), ~12s per block
-// Using a recent anchor avoids drift from missed-slot accumulation since the merge.
-const ANCHOR_BLOCK = 25028441;
-const ANCHOR_TIMESTAMP = 1777979735;
-const BLOCKS_PER_HOUR = 300; // 3600s / 12s per block
+const uniswapWethBstPoolAddress = config.uniswapPoolContracts['BST/ETH']?.address;
+const uniswapBstPointPoolAddress = config.uniswapPoolContracts['BST/POINT']?.address;
 
-const estimateTimestamp = (blockNumber: number): number =>
-  ANCHOR_TIMESTAMP + (blockNumber - ANCHOR_BLOCK) * 12;
-
-const uniswapWethBstPoolAddress = config.uniswapPoolContracts.find(
-  (contract) => contract.assetPairId === 'BST/ETH',
-)?.address;
-
-const uniswapBstPointPoolAddress = config.uniswapPoolContracts.find(
-  (contract) => contract.assetPairId === 'BST/POINT',
-)?.address;
-
-const poolAssetPairId = (address: string): string | undefined =>
-  config.uniswapPoolContracts.find((c) => c.address === address)?.assetPairId;
+// address → { pairId, token0PairId, token1PairId } — used by generic Sync/Transfer/onBlock handlers
+const addressToPool = Object.fromEntries(
+  Object.entries(config.uniswapPoolContracts).map(([pairId, c]) => [c.address, { pairId, ...c }]),
+);
 
 UniswapPoolV2.Swap.handler(async ({ event, context }) => {
   const [ethUSDAssetPair, bstUSDAssetPair] = await Promise.all([
@@ -102,12 +90,12 @@ UniswapPoolV2.Transfer.handler(async ({ event, context }) => {
   const isBurn = event.params.to === ZeroAddress;
   if (!isMint && !isBurn) return;
 
-  const assetPairId = poolAssetPairId(event.srcAddress);
-  if (!assetPairId) return;
+  const poolCfg = addressToPool[event.srcAddress];
+  if (!poolCfg) return;
 
   const pool =
     (await context.UniswapV2Pool.get(event.srcAddress)) ??
-    getNewUniswapV2Pool(event.srcAddress, assetPairId);
+    getNewUniswapV2Pool(event.srcAddress, poolCfg.pairId);
 
   context.UniswapV2Pool.set({
     ...pool,
@@ -119,6 +107,9 @@ UniswapPoolV2.Transfer.handler(async ({ event, context }) => {
 
 // On every reserve change, compute and store LP token price in USD
 UniswapPoolV2.Sync.handler(async ({ event, context }) => {
+  const poolCfg = addressToPool[event.srcAddress];
+  if (!poolCfg) return;
+
   const pool = await context.UniswapV2Pool.get(event.srcAddress);
   if (!pool || pool.totalSupply === 0n) return;
 
@@ -129,68 +120,48 @@ UniswapPoolV2.Sync.handler(async ({ event, context }) => {
   };
   context.UniswapV2Pool.set(updatedPool);
 
+  const [token0Price, token1Price] = await Promise.all([
+    context.AssetPair.get(poolCfg.token0PairId),
+    context.AssetPair.get(poolCfg.token1PairId),
+  ]);
+  if (!token0Price || !token1Price) return;
+
   const { start: hourStart } = getHour(event.block.timestamp);
   const { start: dayStart } = getDay(event.block.timestamp);
-
-  if (event.srcAddress === uniswapWethBstPoolAddress) {
-    const [ethUSD, bstUSD] = await Promise.all([
-      context.AssetPair.get('ETH/USD'),
-      context.AssetPair.get('BST/USD'),
-    ]);
-    if (!ethUSD || !bstUSD) return;
-    const { assetPairPrice, assetPair } = getLPAssetPairData(
-      updatedPool, bstUSD.latestPrice, ethUSD.latestPrice,
-      event.block.timestamp, event.block.number, event.logIndex, dayStart, hourStart,
-    );
-    context.AssetPairPrice.set(assetPairPrice);
-    context.AssetPair.set(assetPair);
-  }
-
-  if (event.srcAddress === uniswapBstPointPoolAddress) {
-    const [bstUSD, pointUSD] = await Promise.all([
-      context.AssetPair.get('BST/USD'),
-      context.AssetPair.get('POINT/USD'),
-    ]);
-    if (!bstUSD || !pointUSD) return;
-    const { assetPairPrice, assetPair } = getLPAssetPairData(
-      updatedPool, bstUSD.latestPrice, pointUSD.latestPrice,
-      event.block.timestamp, event.block.number, event.logIndex, dayStart, hourStart,
-    );
-    context.AssetPairPrice.set(assetPairPrice);
-    context.AssetPair.set(assetPair);
-  }
+  const { assetPairPrice, assetPair } = getLPAssetPairData(
+    updatedPool, token0Price.latestPrice, token1Price.latestPrice,
+    event.block.timestamp, event.block.number, event.logIndex, dayStart, hourStart,
+  );
+  context.AssetPairPrice.set(assetPairPrice);
+  context.AssetPair.set(assetPair);
 });
 
 // Recalculate LP price every ~1 hour using latest USD asset pair prices,
 // so AssetPairPrice stays current even when no Sync event fires for extended periods.
 onBlock(
-  { name: 'HourlyLPPriceUpdate', chain: 1, interval: BLOCKS_PER_HOUR },
+  { name: 'HourlyLPPriceUpdate', chain: 1, interval: 300 },
   async ({ block, context }) => {
-    const [wethBstPool, bstPointPool, ethUSD, bstUSD, pointUSD] = await Promise.all([
-      uniswapWethBstPoolAddress ? context.UniswapV2Pool.get(uniswapWethBstPoolAddress) : null,
-      uniswapBstPointPoolAddress ? context.UniswapV2Pool.get(uniswapBstPointPoolAddress) : null,
-      context.AssetPair.get('ETH/USD'),
-      context.AssetPair.get('BST/USD'),
-      context.AssetPair.get('POINT/USD'),
-    ]);
-
     if (context.isPreload) return;
 
-    const timestamp = estimateTimestamp(block.number);
-    const { start: hourStart } = getHour(timestamp);
-    const { start: dayStart } = getDay(timestamp);
+    const poolCfgs = Object.values(addressToPool);
+    const results = await Promise.all(
+      poolCfgs.map(({ address, token0PairId, token1PairId }) =>
+        Promise.all([
+          context.UniswapV2Pool.get(address),
+          context.AssetPair.get(token0PairId),
+          context.AssetPair.get(token1PairId),
+        ]),
+      ),
+    );
 
-    if (wethBstPool && wethBstPool.totalSupply !== 0n && ethUSD && bstUSD) {
+    for (let i = 0; i < poolCfgs.length; i++) {
+      const [pool, token0Price, token1Price] = results[i];
+      if (!pool || pool.totalSupply === 0n || !token0Price || !token1Price) continue;
+      const timestamp = Math.max(token0Price.updatedAt, token1Price.updatedAt);
+      const { start: hourStart } = getHour(timestamp);
+      const { start: dayStart } = getDay(timestamp);
       const { assetPairPrice, assetPair } = getLPAssetPairData(
-        wethBstPool, bstUSD.latestPrice, ethUSD.latestPrice, timestamp, block.number, 0, dayStart, hourStart,
-      );
-      context.AssetPairPrice.set(assetPairPrice);
-      context.AssetPair.set(assetPair);
-    }
-
-    if (bstPointPool && bstPointPool.totalSupply !== 0n && bstUSD && pointUSD) {
-      const { assetPairPrice, assetPair } = getLPAssetPairData(
-        bstPointPool, bstUSD.latestPrice, pointUSD.latestPrice, timestamp, block.number, 0, dayStart, hourStart,
+        pool, token0Price.latestPrice, token1Price.latestPrice, timestamp, block.number, 0, dayStart, hourStart,
       );
       context.AssetPairPrice.set(assetPairPrice);
       context.AssetPair.set(assetPair);

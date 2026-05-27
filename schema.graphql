@@ -64,7 +64,7 @@ type AssetPair @entity {
   prices: [AssetPairPrice!]! @derivedFrom(field: "assetPair")
 }
 
-type UniswapV2Pool {
+type UniswapV2Pool @entity {
   id: ID!          # pool contract address
   assetPairId: String!
   totalSupply: BigInt!
