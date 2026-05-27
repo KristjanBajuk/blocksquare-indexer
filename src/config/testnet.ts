@@ -43,16 +43,18 @@ export const testnetConfig: Config = {
   ],
   propertyTokenOfferingAddress: getAddress('0x223ad3ac5df27f8e062a805a04996f00f1feaceb'),
   propertyTokenOfferingV2Address: getAddress('0xD7C0593cfF0221E0Aae4E466D79C9AC4f5a160fa'),
-  uniswapPoolContracts: [
-    {
-      assetPairId: 'BST/POINT',
+  uniswapPoolContracts: {
+    'BST/POINT': {
       address: getAddress('0xc026cBA28A7f94C8Bc16547e979295191b2FD671'),
+      token0PairId: 'BST/USD',
+      token1PairId: 'POINT/USD',
     },
-    {
-      assetPairId: 'BST/ETH',
+    'BST/ETH': {
       address: getAddress('0x0e85fb1be698e777f2185350b4a52e5ee8df51a6'),
+      token0PairId: 'BST/USD',
+      token1PairId: 'ETH/USD',
     },
-  ],
+  },
   uniswapWethDaiPoolAddress: getAddress('0xa478c2975ab1ea89e8196811f51a7b7ade33eb11'),
   usersRegistryAddress: getAddress('0xcd0c1845552dd0b2efcba0cf0ecd341a0b99d49a'),
   zeroExAddress: getAddress('0xdef1c0ded9bec7f1a1670819833240f027b25eff'),
