@@ -2,6 +2,13 @@ import { indexer } from 'envio';
 import { getMarketplacePoolRecord, getNewMarketplacePoolPosition } from '../helper/MarketplacePool';
 import { ensureWallet, getNewWallet } from '../helper/Wallet';
 import { MarketplacePoolTransactionType } from '../types/enums';
+import { getLoadedConfig } from '../config';
+import { getDay } from '../helper/date';
+import { getAddress } from 'ethers';
+import { calculatePoolRatio } from '../helper/StakingPool';
+import { BigDecimal } from 'envio';
+
+const { governancePoolAddress } = getLoadedConfig();
 
 indexer.onEvent(
   { contract: 'MarketplacePool', event: 'CPInitialized' },
@@ -40,6 +47,10 @@ indexer.onEvent(
 );
 
 indexer.onEvent({ contract: 'MarketplacePool', event: 'Deposit' }, async ({ event, context }) => {
+  const { start: dayStart } = getDay(event.block.timestamp);
+  const checksumGovAddress = getAddress(governancePoolAddress);
+  const stakingPool = await context.StakingPool.get(`${event.chainId}-${checksumGovAddress}`);
+
   const [marketplacePool, marketplacePoolPosition] = await Promise.all([
     context.MarketplacePool.getOrThrow(
       `${event.chainId}-${event.srcAddress}`,
@@ -92,10 +103,16 @@ indexer.onEvent({ contract: 'MarketplacePool', event: 'Deposit' }, async ({ even
     amount: event.params.inAmount,
     issuedAmount: event.params.outAmount,
     reward: undefined,
+    dayStartTimestamp: dayStart,
+    ratioAtTransaction: stakingPool ? calculatePoolRatio(stakingPool) : BigDecimal(0),
   });
 });
 
 indexer.onEvent({ contract: 'MarketplacePool', event: 'Withdraw' }, async ({ event, context }) => {
+  const { start: dayStart } = getDay(event.block.timestamp);
+  const checksumGovAddress = getAddress(governancePoolAddress);
+  const stakingPool = await context.StakingPool.get(`${event.chainId}-${checksumGovAddress}`);
+
   const [marketplacePool, marketplacePoolPosition] = await Promise.all([
     context.MarketplacePool.getOrThrow(
       `${event.chainId}-${event.srcAddress}`,
@@ -138,6 +155,8 @@ indexer.onEvent({ contract: 'MarketplacePool', event: 'Withdraw' }, async ({ eve
     amount: event.params.outAmount,
     issuedAmount: event.params.inAmount,
     reward: event.params.reward,
+    dayStartTimestamp: dayStart,
+    ratioAtTransaction: stakingPool ? calculatePoolRatio(stakingPool) : BigDecimal(0),
   });
 });
 
@@ -170,6 +189,10 @@ indexer.onEvent({ contract: 'MarketplacePool', event: 'Capped' }, async ({ event
 });
 
 indexer.onEvent({ contract: 'MarketplacePool', event: 'Reward' }, async ({ event, context }) => {
+  const { start: dayStart } = getDay(event.block.timestamp);
+  const checksumGovAddress = getAddress(governancePoolAddress);
+  const stakingPool = await context.StakingPool.get(`${event.chainId}-${checksumGovAddress}`);
+
   const marketplacePool = await context.MarketplacePool.getOrThrow(
     `${event.chainId}-${event.srcAddress}`,
     'MarketplacePool.Reward.handler: MarketplacePool not found',
@@ -199,6 +222,8 @@ indexer.onEvent({ contract: 'MarketplacePool', event: 'Reward' }, async ({ event
     amount: event.params.amount,
     issuedAmount: undefined,
     reward: undefined,
+    dayStartTimestamp: dayStart,
+    ratioAtTransaction: stakingPool ? calculatePoolRatio(stakingPool) : BigDecimal(0),
   });
 });
 

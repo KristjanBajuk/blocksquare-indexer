@@ -112,6 +112,8 @@ contracts:
     handler: src/handler/UniswapPoolV2.ts
     events:
       - event: Swap
+      - event: Sync
+      - event: Transfer
   - name: Users
     abi_file_path: abis/Users.json
     handler: src/handler/Users.ts

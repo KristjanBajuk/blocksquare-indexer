@@ -45,12 +45,13 @@ export const mainnetConfig: Config = {
   ],
   propertyTokenOfferingAddress: getAddress('0x25862c4fb4ce9d6ff9b463488e0ec656fa08de78'),
   propertyTokenOfferingV2Address: null,
-  uniswapPoolContracts: [
-    {
-      assetPairId: 'BST/ETH',
+  uniswapPoolContracts: {
+    'BST/ETH': {
       address: getAddress('0x0e85fb1be698e777f2185350b4a52e5ee8df51a6'),
+      token0PairId: 'BST/USD',
+      token1PairId: 'ETH/USD',
     },
-  ],
+  },
   uniswapWethDaiPoolAddress: getAddress('0xa478c2975ab1ea89e8196811f51a7b7ade33eb11'),
   usersRegistryAddress: getAddress('0x13344d0cb96b17df81c4171ce47e14ff6c1975f7'),
   zeroExAddress: getAddress('0xdef1c0ded9bec7f1a1670819833240f027b25eff'),

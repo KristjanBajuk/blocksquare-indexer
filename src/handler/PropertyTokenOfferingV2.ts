@@ -96,6 +96,7 @@ indexer.onEvent(
       investmentToken: params.investmentToken,
       amountInvested: params.amountInvested,
       amountReceived: params.amountReceived,
+      blockTimestamp: event.block.timestamp,
     });
   },
 );

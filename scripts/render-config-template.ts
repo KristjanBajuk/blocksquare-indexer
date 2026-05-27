@@ -30,7 +30,7 @@ const configValues: ConfigOverride = {
   jointStakingPoolContracts: loadedConfig.propertyStakingContracts
     .map((contract) => contract.address)
     .join(','),
-  jointUniswapPoolContracts: loadedConfig.uniswapPoolContracts
+  jointUniswapPoolContracts: Object.values(loadedConfig.uniswapPoolContracts)
     .map((contract) => contract.address)
     .join(','),
   jointLiquidityStakingPoolContracts: loadedConfig.liquidityStakingContracts

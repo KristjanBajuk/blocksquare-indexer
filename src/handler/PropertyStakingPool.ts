@@ -10,6 +10,7 @@ import {
 import { ensureWallet, getNewWallet } from '../helper/Wallet';
 import { BIGINT_100K, WEI_DECIMALS } from '../helper/constants';
 import { PropertyStakingPoolTransactionType } from '../types/enums';
+import { getDay } from '../helper/date';
 
 indexer.onEvent(
   { contract: 'PropertyStakingPool', event: 'Deposit' },
@@ -97,6 +98,7 @@ indexer.onEvent(
     };
 
     context.TokenDeposit.set(tokenDeposit);
+    const { start: dayStart } = getDay(event.block.timestamp);
 
     context.PropertyStakingPoolTransaction.set({
       id: `${event.chainId}-${event.transaction.hash}-${event.logIndex}`,
@@ -108,9 +110,11 @@ indexer.onEvent(
       blockTimestamp: event.block.timestamp,
       wallet_id: `${event.chainId}-${event.params.owner}`,
       amount: event.params.inAmount,
+      tokenAddress: event.params.property,
       issuedAmount: event.params.outAmount,
       rewardToUser: undefined,
       rewardToFeeReceiver: undefined,
+      dayStartTimestamp: dayStart,
     });
   },
 );
@@ -190,6 +194,8 @@ indexer.onEvent(
     // Remove token deposit
     context.TokenDeposit.deleteUnsafe(tokenDeposit.id);
 
+    const { start: dayStart } = getDay(event.block.timestamp);
+
     context.PropertyStakingPoolTransaction.set({
       id: `${event.chainId}-${event.transaction.hash}-${event.logIndex}`,
       chainId: event.chainId,
@@ -200,9 +206,11 @@ indexer.onEvent(
       blockTimestamp: event.block.timestamp,
       wallet_id: `${event.chainId}-${event.params.owner}`,
       amount: event.params.outAmount,
+      tokenAddress: event.params.property,
       issuedAmount: event.params.inAmount,
       rewardToUser: event.params.rewardToUser,
       rewardToFeeReceiver: event.params.rewardToFeeReciever,
+      dayStartTimestamp: dayStart,
     });
   },
 );
@@ -227,6 +235,7 @@ indexer.onEvent(
     );
 
     const rewardWalletId = await ensureWallet(context, event.chainId, event.params.from);
+    const { start: dayStart } = getDay(event.block.timestamp);
 
     context.PropertyStakingPoolTransaction.set({
       id: `${event.chainId}-${event.transaction.hash}-${event.logIndex}`,
@@ -238,9 +247,11 @@ indexer.onEvent(
       blockTimestamp: event.block.timestamp,
       wallet_id: rewardWalletId,
       amount: event.params.amount,
+      tokenAddress: '',
       issuedAmount: undefined,
       rewardToUser: undefined,
       rewardToFeeReceiver: undefined,
+      dayStartTimestamp: dayStart,
     });
   },
 );

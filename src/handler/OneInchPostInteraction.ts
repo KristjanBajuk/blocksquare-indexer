@@ -1,8 +1,5 @@
 import { indexer } from 'envio';
-import {
-  uint256ToAddress,
-  updatePropertyTokenTradeCounts,
-} from '../helper/LimitOrderTrades';
+import { uint256ToAddress, updatePropertyTokenTradeCounts } from '../helper/LimitOrderTrades';
 import { LimitOrderProtocol } from '../types/enums';
 
 indexer.onEvent(

@@ -79,7 +79,7 @@ const mergeOverlappingIntervals = (
   for (const currentInterval of sortedIntervals) {
     if (
       mergedIntervals.length === 0 ||
-     !doOverlap(currentInterval, mergedIntervals[mergedIntervals.length - 1]!)
+      !doOverlap(currentInterval, mergedIntervals[mergedIntervals.length - 1]!)
     ) {
       // Add new non-overlapping interval
       mergedIntervals.push(currentInterval);
