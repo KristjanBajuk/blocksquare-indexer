@@ -26,15 +26,51 @@ indexer.onEvent(
       return;
     }
 
+    const tradeId = `${event.chainId}-${propertyToken.contractAddress}-${event.transaction.hash}-${event.logIndex}`;
+    const buyerWalletId = `${event.chainId}-${event.params.taker}`;
+    const marketplaceId = propertyToken.certifiedPartner_id;
+
+    const extraData = event.params.extraData;
+    const hasValidExtraData = extraData && extraData.length === 66;
+
+    let validReferralCode = '';
+
+    if (hasValidExtraData) {
+      const userBytes = extraData.slice(2);
+      const referrerUserId = `${event.chainId}-${userBytes}`;
+      const referralId = `${event.chainId}-${marketplaceId}-${event.params.taker}`;
+
+      const [referrerUser, buyerWalletEntity, existingReferral] = await Promise.all([
+        context.User.get(referrerUserId),
+        context.Wallet.get(buyerWalletId),
+        context.Referral.get(referralId),
+      ]);
+
+      if (referrerUser && buyerWalletEntity?.user_id !== referrerUserId) {
+        validReferralCode = extraData;
+
+        if (!existingReferral) {
+          context.Referral.set({
+            id: referralId,
+            wallet_id: buyerWalletId,
+            referrer_id: referrerUserId,
+            marketplace_id: marketplaceId,
+            firstOrderTrade_id: tradeId,
+            createdAt: event.block.timestamp,
+          });
+        }
+      }
+    }
+
     context.PropertyTokenTrade.set({
-      id: `${event.chainId}-${propertyToken.contractAddress}-${event.transaction.hash}-${event.logIndex}`,
+      id: tradeId,
       chainID: event.chainId,
       transactionHash: event.transaction.hash,
       blockNumber: event.block.number,
       blockTimestamp: event.block.timestamp,
       propertyToken_id: propertyToken.id,
       maker_id: `${event.chainId}-${maker}`,
-      taker_id: `${event.chainId}-${event.params.taker}`,
+      taker_id: buyerWalletId,
       orderHash: event.params.orderHash,
       makerToken: makerToken,
       takerToken: takerToken,
@@ -42,6 +78,7 @@ indexer.onEvent(
       makerTokenFilledAmount: event.params.makingAmount,
       propertyValuation: propertyToken.propertyValuation,
       protocol: LimitOrderProtocol.OneInch,
+      referralCode: validReferralCode,
     });
 
     // Handle case where property token is on maker side (being sold)

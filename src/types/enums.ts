@@ -17,11 +17,9 @@ export enum PropertyStakingPoolTransactionType {
 }
 
 export enum MarketplacePoolTransactionType {
-  CP_INITIALIZED = 'CP_INITIALIZED',
   DEPOSIT = 'DEPOSIT',
   WITHDRAW = 'WITHDRAW',
   REWARD = 'REWARD',
-  LIQUIDATE_CP_COLLATERAL = 'LIQUIDATE_CP_COLLATERAL',
 }
 
 export enum StakingPoolTransactionType {
