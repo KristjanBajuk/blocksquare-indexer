@@ -1,4 +1,4 @@
-import { Token, TokenHolder, TokenRecord } from 'generated';
+import { Token, TokenHolder, TokenHolderRecord, TokenRecord } from 'generated';
 import { getDay, getHour } from './date';
 
 export const getNewToken = (
@@ -32,6 +32,30 @@ export const getNewTokenHolder = (
     chainId,
     amount: 0n,
     token_id: `${chainId}-${tokenAddress}`,
+  };
+};
+
+export const getTokenHolderRecord = (
+  chainId: number,
+  tokenAddress: string,
+  walletAddress: string,
+  amount: bigint,
+  token: Token,
+  event: {
+    transaction: { hash: string };
+    logIndex: number;
+    block: { timestamp: number; number: number };
+  },
+): TokenHolderRecord => {
+  return {
+    id: `${chainId}-${tokenAddress}-${walletAddress}-${event.transaction.hash}-${event.logIndex}`,
+    chainId,
+    token_id: token.id,
+    walletAddress,
+    amount,
+    blockTimestamp: event.block.timestamp,
+    blockNumber: event.block.number,
+    transactionHash: event.transaction.hash,
   };
 };
 

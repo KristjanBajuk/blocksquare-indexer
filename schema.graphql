@@ -610,6 +610,31 @@ type TokenRecord {
   token: Token!
 }
 
+# id: chainId-tokenAddress-walletAddress-txHash-logIndex
+type TokenHolderRecord {
+  id: ID!
+  chainId: Int!
+  token: Token!
+  walletAddress: Bytes! @index
+  amount: BigInt!
+  blockTimestamp: Int! @index
+  blockNumber: Int!
+  transactionHash: Bytes!
+}
+
+# id: chainId-poolAddress-walletAddress-txHash-logIndex
+type StakingPoolPositionRecord {
+  id: ID!
+  chainId: Int!
+  pool: StakingPool!
+  walletAddress: Bytes! @index
+  issuedAmount: BigInt!
+  ratio: BigDecimal!
+  blockTimestamp: Int! @index
+  blockNumber: Int!
+  transactionHash: Bytes!
+}
+
 type Referral @entity {
   id: ID! # chainId-cpAddress-buyerWallet
   wallet: Wallet!
