@@ -3,9 +3,33 @@
 name: Blocksquare
 field_selection:
   transaction_fields:
-    - 'hash'
-    - 'transactionIndex'
+    - "hash"
+    - "transactionIndex"
+    - "from"
 contracts:
+  - name: UniswapV4PoolManager
+    abi_file_path: abis/UniswapV4PoolManager.json
+    handler: src/handler/UniswapV4PoolManager.ts
+    events:
+      - event: Initialize
+      - event: ModifyLiquidity
+      - event: Swap
+  - name: UniswapV4PositionManager
+    abi_file_path: abis/UniswapV4PositionManager.json
+    handler: src/handler/UniswapV4PositionManager.ts
+    events:
+      - event: Transfer
+  - name: UniswapV4Staking
+    abi_file_path: abis/UniswapV4Staking.json
+    handler: src/handler/UniswapV4Staking.ts
+    events:
+      - event: LPStakingInit
+      - event: Deposit
+      - event: Withdraw
+      - event: EarlyWithdraw
+      - event: Reward
+      - event: RewardsClaimed
+      - event: RewardsBurned
   - name: BlocksquareToken
     abi_file_path: abis/BlocksquareToken.json
     handler: src/handler/Token.ts
@@ -229,5 +253,14 @@ chains:
           - 0xf578feD7b233fca3D227cE9e9A0f60073eE07170
       - name: UniswapPoolV2
         address: [0xc026cBA28A7f94C8Bc16547e979295191b2FD671,0x0E85fB1be698E777F2185350b4A52E5eE8DF51A6]
+      - name: UniswapV4PoolManager
+        address:
+          - 0xE03A1074c86CFeDd5C142C4F04F1a1536e203543
+      - name: UniswapV4PositionManager
+        address:
+          - 0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4
+      - name: UniswapV4Staking
+        address:
+          - 0xfdf22B183490f005e2e51A6Caf4202E46cc11b97
 
   ### END ECOSYSTEM NETWORK SPECIFIC SECTION ###
