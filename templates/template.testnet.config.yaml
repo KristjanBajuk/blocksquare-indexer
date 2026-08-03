@@ -3,9 +3,33 @@ preload_handlers: true
 unordered_multichain_mode: true
 field_selection:
   transaction_fields:
-    - 'hash'
-    - 'transactionIndex'
+    - "hash"
+    - "transactionIndex"
+    - "from"
 contracts:
+  - name: UniswapV4PoolManager
+    abi_file_path: abis/UniswapV4PoolManager.json
+    handler: src/handler/UniswapV4PoolManager.ts
+    events:
+      - event: Initialize
+      - event: ModifyLiquidity
+      - event: Swap
+  - name: UniswapV4PositionManager
+    abi_file_path: abis/UniswapV4PositionManager.json
+    handler: src/handler/UniswapV4PositionManager.ts
+    events:
+      - event: Transfer
+  - name: UniswapV4Staking
+    abi_file_path: abis/UniswapV4Staking.json
+    handler: src/handler/UniswapV4Staking.ts
+    events:
+      - event: LPStakingInit
+      - event: Deposit
+      - event: Withdraw
+      - event: EarlyWithdraw
+      - event: Reward
+      - event: RewardsClaimed
+      - event: RewardsBurned
   - name: BlocksquareToken
     abi_file_path: abis/BlocksquareToken.json
     handler: src/handler/Token.ts
@@ -229,5 +253,14 @@ networks:
           - <%= config.oneInchPostInteractionAddress %>
       - name: UniswapPoolV2
         address: [<%= config.jointUniswapPoolContracts %>]
+      - name: UniswapV4PoolManager
+        address:
+          - <%= config.uniswapV4PoolManagerAddress %>
+      - name: UniswapV4PositionManager
+        address:
+          - <%= config.uniswapV4PositionManagerAddress %>
+      - name: UniswapV4Staking
+        address:
+          - <%= config.uniswapV4StakingAddress %>
 
   ### END ECOSYSTEM NETWORK SPECIFIC SECTION ###
