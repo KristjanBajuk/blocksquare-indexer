@@ -5,6 +5,7 @@ import { createTestIndexer, type TestIndexer, type TestIndexerProcessConfig } fr
 import { ZeroAddress } from 'ethers';
 import { CHAIN_ID, addr } from './fixtures';
 import { getAmount0, getAmount1 } from '../src/helper/UniswapV4Helpers/liquidityAmounts';
+import { computeV4PoolId } from '../src/helper/UniswapV4Helpers/utils';
 
 type ChainSimulate = NonNullable<
   NonNullable<TestIndexerProcessConfig['chains'][typeof CHAIN_ID]>['simulate']
@@ -16,7 +17,8 @@ const BST_ADDRESS = addr('0x7000Ec7486d8c6f9bd9FfA930f9ACE2D9564d02b');
 const OTHER_TOKEN = addr('0x9999999999999999999999999999999999999999');
 const SENDER = addr('0x6666666666666666666666666666666666666666');
 
-const POOL_ID = `0x${'ab'.repeat(32)}`;
+// The real ETH/BST 0.3% poolId, derived the same way the chain does.
+const POOL_ID = computeV4PoolId(ZeroAddress, BST_ADDRESS, 3000n, 60n, ZeroAddress);
 const OTHER_POOL_ID = `0x${'cd'.repeat(32)}`;
 const POOL_ENTITY_ID = `${CHAIN_ID}-${POOL_ID}`;
 
@@ -108,17 +110,13 @@ describe('UniswapV4PoolManager', () => {
     indexer = createTestIndexer();
   });
 
-  it('indexes only the ETH/BST pool and ignores liquidity on unknown pools', async (t) => {
+  it('indexes only the ETH/BST pool', async (t) => {
     await runEvents(
       indexer,
       // ETH/BST -> indexed
       initializeEvent({ logIndex: 1 }),
-      // ETH paired with a different token -> ignored
-      initializeEvent({ poolId: OTHER_POOL_ID, currency1: OTHER_TOKEN, logIndex: 2 }),
-      // BST but currency0 is not native ETH -> ignored
+      // BST as currency1 but currency0 is not native ETH -> rejected by the handler guard
       initializeEvent({ poolId: `0x${'ee'.repeat(32)}`, currency0: OTHER_TOKEN, logIndex: 3 }),
-      // liquidity change on a pool that was never indexed -> ignored
-      modifyLiquidityEvent(TX_A, { poolId: OTHER_POOL_ID, logIndex: 4, blockNumber: 101 }),
     );
 
     const pools = await indexer.UniswapV4Pool.getAll();
@@ -136,6 +134,16 @@ describe('UniswapV4PoolManager', () => {
 
     t.expect(await indexer.UniswapV4PoolPosition.getAll()).toHaveLength(0);
     t.expect(await indexer.UniswapV4PoolPositionRecord.getAll()).toHaveLength(0);
+  });
+
+  it('non-BST Initialize creates no pool', async (t) => {
+    await runEvents(indexer, initializeEvent({ poolId: OTHER_POOL_ID, currency1: OTHER_TOKEN }));
+    t.expect(await indexer.UniswapV4Pool.getAll()).toHaveLength(0);
+  });
+
+  it('ModifyLiquidity on an unindexed pool creates no position', async (t) => {
+    await runEvents(indexer, modifyLiquidityEvent(TX_A, { poolId: OTHER_POOL_ID }));
+    t.expect(await indexer.UniswapV4PoolPosition.getAll()).toHaveLength(0);
   });
 
   it('ModifyLiquidity creates a position with computed amounts and a daily record', async (t) => {

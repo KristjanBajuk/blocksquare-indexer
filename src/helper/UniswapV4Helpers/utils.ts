@@ -57,3 +57,17 @@ export const getUniswapV4StakingDeployementBlock = (chainId: number) => {
     // TODO: Replace with mainnet deployment block when available.
     return chainId === SEPOLIA_CHAIN_ID ? 10245814 : 10245814;
 }
+// Uniswap V4 poolId = keccak256(abi.encode(PoolKey)).
+export const computeV4PoolId = (
+  currency0: string,
+  currency1: string,
+  fee: bigint,
+  tickSpacing: bigint,
+  hooks: string,
+): string =>
+  keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ["address", "address", "uint24", "int24", "address"],
+      [currency0, currency1, fee, tickSpacing, hooks],
+    ),
+  );

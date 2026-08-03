@@ -6,6 +6,9 @@ import { getDay } from "../helper/date";
 
 const bstTokenAddress = getLoadedConfig().blockSquareTokenAddress;
 
+// The PoolManager is a chain-wide singleton, so every V4 pool emits through it.
+// Like envio's reference uniswap-v4-indexer, all pool events are processed and
+// non-ETH/BST pools are dropped by the handler guards below.
 indexer.onEvent({ contract: "UniswapV4PoolManager", event: "Initialize" }, async ({ event, context }) => {
   /**
    * We only want to index the ETH : BST pool.

@@ -7,6 +7,7 @@ import { ethers, id } from "ethers";
 import {
   BOOST_PRECISION,
   buildMerkleTree,
+  computeV4PoolId,
   getPredictedDailyBlockCount,
   getUniswapV4StakingDeployementBlock,
   TOTAL_DAILY_REWARDS,
@@ -44,7 +45,26 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "LPStakingInit" }, async 
     earlyRewardSlash,
   } = event.params;
 
-  const uniV4PoolEntityId = `${chainId}-${targetPoolKey.toString()}`;
+  // Uniswap V4 poolId = keccak256(abi.encode(PoolKey)). targetPoolKey is an
+  // indexed tuple: real logs carry only its keccak topic hash (= the poolId),
+  // while decoded forms (positional array or named object) need hashing here.
+  const poolKey: unknown = targetPoolKey;
+  let poolId: string;
+  if (typeof poolKey === 'string') {
+    poolId = poolKey;
+  } else {
+    const [currency0, currency1, fee, tickSpacing, hooks] = Array.isArray(poolKey)
+      ? poolKey
+      : [
+          targetPoolKey.currency0,
+          targetPoolKey.currency1,
+          targetPoolKey.fee,
+          targetPoolKey.tickSpacing,
+          targetPoolKey.hooks,
+        ];
+    poolId = computeV4PoolId(currency0, currency1, fee, tickSpacing, hooks);
+  }
+  const uniV4PoolEntityId = `${chainId}-${poolId}`;
 
   const exitsingUniV4Pool = await context.UniswapV4Pool.get(uniV4PoolEntityId);
 
@@ -59,7 +79,7 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "LPStakingInit" }, async 
         chainId,
         contractAddress,
         positionManager,
-        targetPoolKey: targetPoolKey.toString(),
+        targetPoolKey: poolId,
         minDays,
         maxDays,
         minBoost,
@@ -330,14 +350,13 @@ indexer.onBlock(
     );
     if (!uniV4Pool) return;
 
-    // Fetch all staked positions for this pool and filter out closed ones.
-    const allStakedPositions =
-      await context.StakingPoolV4Position.getWhere({
+    // Fetch all open staked positions for this pool in a single multi-field query.
+    const activeStakedPositions = [
+      ...(await context.StakingPoolV4Position.getWhere({
         pool_id: { _eq: STAKING_POOL_ENTITY_ID },
-      });
-    const activeStakedPositions = allStakedPositions
-      .filter((p) => !p.isPositionClosed)
-      .sort((a, b) => a.updatedAtTimestamp - b.updatedAtTimestamp);
+        isPositionClosed: { _eq: false },
+      })),
+    ].sort((a, b) => a.updatedAtTimestamp - b.updatedAtTimestamp);
     if (activeStakedPositions.length === 0) return;
 
     const uniPositions = await context.UniswapV4PoolPosition.getWhere({
