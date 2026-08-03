@@ -1,5 +1,5 @@
 import { getAddress } from 'ethers';
-import { Config } from '../types/config';
+import type { Config } from '../types/config';
 import { PropertyStakingPoolType } from '../types/enums';
 
 export const mainnetConfig: Config = {

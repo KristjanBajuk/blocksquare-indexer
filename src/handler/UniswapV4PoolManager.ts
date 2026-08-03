@@ -1,12 +1,12 @@
 import { ZeroAddress } from "ethers";
-import { UniswapV4PoolManager } from "generated";
+import { indexer } from "envio";
 import { getLoadedConfig } from "../config";
 import { getAmount0, getAmount1 } from "../helper/UniswapV4Helpers/liquidityAmounts";
 import { getDay } from "../helper/date";
 
 const bstTokenAddress = getLoadedConfig().blockSquareTokenAddress;
 
-UniswapV4PoolManager.Initialize.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4PoolManager", event: "Initialize" }, async ({ event, context }) => {
   /**
    * We only want to index the ETH : BST pool.
    *
@@ -51,7 +51,7 @@ UniswapV4PoolManager.Initialize.handler(async ({ event, context }) => {
   });
 });
 
-UniswapV4PoolManager.Swap.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4PoolManager", event: "Swap" }, async ({ event, context }) => {
   const { chainId } = event;
   const { id: poolId, tick, sqrtPriceX96 } = event.params;
 
@@ -65,7 +65,9 @@ UniswapV4PoolManager.Swap.handler(async ({ event, context }) => {
     });
 
 
-    const allPoolPositions = await context.UniswapV4PoolPosition.getWhere.pool_id.eq(existingPool.id);
+    const allPoolPositions = await context.UniswapV4PoolPosition.getWhere({
+      pool_id: { _eq: existingPool.id },
+    });
 
     if(allPoolPositions.length){
       for (const position of allPoolPositions) {
@@ -83,7 +85,7 @@ UniswapV4PoolManager.Swap.handler(async ({ event, context }) => {
 
 });
 
-UniswapV4PoolManager.ModifyLiquidity.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4PoolManager", event: "ModifyLiquidity" }, async ({ event, context }) => {
   /**
    * ModifyLiquidity event updates position liquidity.
    *
@@ -126,10 +128,9 @@ UniswapV4PoolManager.ModifyLiquidity.handler(async ({ event, context }) => {
 
   // Verify if the position exists using unique business identity
   if (!position) {
-    const positionByUniqueKey =
-      await context.UniswapV4PoolPosition.getWhere.uniqueKey.eq(
-        positionUniqueKey,
-      );
+    const positionByUniqueKey = await context.UniswapV4PoolPosition.getWhere({
+      uniqueKey: { _eq: positionUniqueKey },
+    });
     position = positionByUniqueKey[0];
   }
 

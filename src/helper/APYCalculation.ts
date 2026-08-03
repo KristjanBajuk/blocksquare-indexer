@@ -1,7 +1,7 @@
-import { PropertyTokenRevenueDistribution } from 'generated';
+import type { PropertyTokenRevenueDistribution } from 'envio';
 import { formatUnits } from 'ethers';
 import dayjs from 'dayjs';
-import { PropertyTokenRevenueDistributionInterval } from '../types/config';
+import type { PropertyTokenRevenueDistributionInterval } from '../types/config';
 import { convertUnixToDate, getRangeOfDays } from './date';
 import { normalizeTimestampToSeconds } from './time';
 
@@ -79,13 +79,13 @@ const mergeOverlappingIntervals = (
   for (const currentInterval of sortedIntervals) {
     if (
       mergedIntervals.length === 0 ||
-      !doOverlap(currentInterval, mergedIntervals[mergedIntervals.length - 1])
+      !doOverlap(currentInterval, mergedIntervals[mergedIntervals.length - 1]!)
     ) {
       // Add new non-overlapping interval
       mergedIntervals.push(currentInterval);
     } else {
       // Merge overlapping intervals
-      const lastMergedInterval = mergedIntervals[mergedIntervals.length - 1];
+      const lastMergedInterval = mergedIntervals[mergedIntervals.length - 1]!;
 
       lastMergedInterval.toDate = lastMergedInterval.toDate.isAfter(currentInterval.toDate)
         ? lastMergedInterval.toDate

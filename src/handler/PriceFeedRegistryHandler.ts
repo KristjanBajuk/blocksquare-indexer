@@ -8,7 +8,7 @@ import {
   CHAINLINK_USD_ADDRESS,
 } from '../helper/constants';
 
-import { PriceFeedRegistry } from 'generated';
+import { indexer } from 'envio';
 
 // Map of base addresses to their asset symbols (all paired with USD)
 const USD_PAIR_MAPPINGS: Record<string, string> = {
@@ -29,33 +29,34 @@ const getUsdAssetPairId = (base: string, denomination: string): string | null =>
   return baseSymbol ? `${baseSymbol}/USD` : null;
 };
 
-PriceFeedRegistry.FeedConfirmed.contractRegister(
+indexer.contractRegister(
+  { contract: 'PriceFeedRegistry', event: 'FeedConfirmed' },
   async ({ event, context }) => {
     // Only register aggregator if it's a USD pair we're tracking
     if (getUsdAssetPairId(event.params.asset, event.params.denomination)) {
-      context.addPriceDataFeed(event.params.latestAggregator);
+      context.chain.PriceDataFeed.add(event.params.latestAggregator);
     }
-  },
-  {
-    preRegisterDynamicContracts: false,
   },
 );
 
-PriceFeedRegistry.FeedConfirmed.handler(async ({ event, context }) => {
-  const assetPairId = getUsdAssetPairId(event.params.asset, event.params.denomination);
+indexer.onEvent(
+  { contract: 'PriceFeedRegistry', event: 'FeedConfirmed' },
+  async ({ event, context }) => {
+    const assetPairId = getUsdAssetPairId(event.params.asset, event.params.denomination);
 
-  if (!assetPairId) return;
+    if (!assetPairId) return;
 
-  const assetPair = await context.AssetPair.getOrCreate({
-    id: assetPairId,
-    latestPrice: 0,
-    latestPriceBI: 0n,
-    updatedAt: 0,
-    latestAggregatorAddress: event.params.latestAggregator,
-  });
+    const assetPair = await context.AssetPair.getOrCreate({
+      id: assetPairId,
+      latestPrice: 0,
+      latestPriceBI: 0n,
+      updatedAt: 0,
+      latestAggregatorAddress: event.params.latestAggregator,
+    });
 
-  context.AssetPair.set({
-    ...assetPair,
-    latestAggregatorAddress: event.params.latestAggregator,
-  });
-});
+    context.AssetPair.set({
+      ...assetPair,
+      latestAggregatorAddress: event.params.latestAggregator,
+    });
+  },
+);

@@ -1,20 +1,14 @@
-import {
-  BigDecimal,
-  GovernancePool_Deposit_eventArgs,
-  GovernancePool_Reward_eventArgs,
-  GovernancePool_Withdraw_eventArgs,
-  LiquidityStakingPool_Deposit_eventArgs,
-  LiquidityStakingPool_Reward_eventArgs,
-  LiquidityStakingPool_Withdraw_eventArgs,
+import { BigDecimal } from 'envio';
+import type {
+  EvmEvent,
+  EvmOnEventContext,
   StakingPool,
   StakingPoolPosition,
   StakingPoolPositionRecord,
   StakingPoolRecord,
-  eventLog,
-  handlerContext,
-} from 'generated';
+} from 'envio';
 
-import {ensureWallet, getNewWallet} from './Wallet';
+import { ensureWallet, getNewWallet } from './Wallet';
 import { TWO_DAYS_IN_SECONDS } from './constants';
 import { getDay, getHour } from './date';
 import { StakingPoolTransactionType } from '../types/enums';
@@ -103,8 +97,8 @@ export const getStakingPoolRecord = (pool: StakingPool, timestamp: number): Stak
 };
 
 export const StakingDepositHandler = async (
-  event: eventLog<GovernancePool_Deposit_eventArgs | LiquidityStakingPool_Deposit_eventArgs>,
-  context: handlerContext,
+  event: EvmEvent<'GovernancePool', 'Deposit'> | EvmEvent<'LiquidityStakingPool', 'Deposit'>,
+  context: EvmOnEventContext,
 ) => {
   const stakingPool = await context.StakingPool.getOrCreate(
     getNewStakingPool(event.srcAddress, event.chainId),
@@ -139,8 +133,7 @@ export const StakingDepositHandler = async (
     );
   }
 
-  const tempLockedUntil = (event as eventLog<LiquidityStakingPool_Deposit_eventArgs>).params
-    .lockedUntil;
+  const tempLockedUntil = (event as EvmEvent<'LiquidityStakingPool', 'Deposit'>).params.lockedUntil;
 
   const lockedUntil = tempLockedUntil
     ? Number(tempLockedUntil)
@@ -170,13 +163,13 @@ export const StakingDepositHandler = async (
     wallet_id: `${event.chainId}-${event.params.owner}`,
     amount: event.params.inAmount,
     issuedAmount: event.params.outAmount,
-    dayStartTimestamp: dayStart
+    dayStartTimestamp: dayStart,
   });
 };
 
 export const StakingRewardHandler = async (
-  event: eventLog<GovernancePool_Reward_eventArgs | LiquidityStakingPool_Reward_eventArgs>,
-  context: handlerContext,
+  event: EvmEvent<'GovernancePool', 'Reward'> | EvmEvent<'LiquidityStakingPool', 'Reward'>,
+  context: EvmOnEventContext,
 ) => {
   const stakingPool = await context.StakingPool.get(`${event.chainId}-${event.srcAddress}`);
 
@@ -207,13 +200,13 @@ export const StakingRewardHandler = async (
     wallet_id: rewardWalletId,
     amount: event.params.amount,
     issuedAmount: undefined,
-    dayStartTimestamp: dayStart
+    dayStartTimestamp: dayStart,
   });
 };
 
 export const StakingWithdrawHandler = async (
-  event: eventLog<GovernancePool_Withdraw_eventArgs | LiquidityStakingPool_Withdraw_eventArgs>,
-  context: handlerContext,
+  event: EvmEvent<'GovernancePool', 'Withdraw'> | EvmEvent<'LiquidityStakingPool', 'Withdraw'>,
+  context: EvmOnEventContext,
 ) => {
   // Edge case: Some users attempt zero-value withdrawals without having any token balance
   // Example TX: 0x1e546e039bf5e32b0f223ffb19dcfac10d8d714b5b3fc35f0da20602d71641ea
@@ -272,6 +265,6 @@ export const StakingWithdrawHandler = async (
     wallet_id: `${event.chainId}-${event.params.owner}`,
     amount: event.params.outAmount,
     issuedAmount: event.params.inAmount,
-    dayStartTimestamp: dayStart
+    dayStartTimestamp: dayStart,
   });
 };

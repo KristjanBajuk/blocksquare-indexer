@@ -1,10 +1,6 @@
 import { getNewWallet } from "../helper/Wallet";
-import {
-  chain,
-  onBlock,
-  UniswapV4Staking,
-  UserCumulativeReward,
-} from "generated";
+import { indexer } from "envio";
+import type { UserCumulativeReward } from "envio";
 import { getDay, getHour } from "../helper/date";
 import { getLoadedConfig } from "../config";
 import { ethers, id } from "ethers";
@@ -20,7 +16,7 @@ import { StakingPoolV4PositionRecordType } from "../types/enums";
 
 const { uniswapV4StakingAddress, chainId: loadedChainId } = getLoadedConfig();
 
-UniswapV4Staking.LPStakingInit.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4Staking", event: "LPStakingInit" }, async ({ event, context }) => {
   /**
    * LPStakingInit event is emitted when a new staking pool is initialized.
    *
@@ -81,7 +77,7 @@ UniswapV4Staking.LPStakingInit.handler(async ({ event, context }) => {
   }
 });
 
-UniswapV4Staking.Deposit.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4Staking", event: "Deposit" }, async ({ event, context }) => {
   /**
    * Deposit event is emitted when a user stakes their liquidity position NFT.
    *
@@ -176,7 +172,7 @@ UniswapV4Staking.Deposit.handler(async ({ event, context }) => {
   }
 });
 
-UniswapV4Staking.Withdraw.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4Staking", event: "Withdraw" }, async ({ event, context }) => {
   /**
    * Withdraw event is emitted when a user unstakes their liquidity position NFT.
    *
@@ -232,7 +228,7 @@ UniswapV4Staking.Withdraw.handler(async ({ event, context }) => {
   }
 });
 
-UniswapV4Staking.EarlyWithdraw.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4Staking", event: "EarlyWithdraw" }, async ({ event, context }) => {
   /**
    * EarlyWithdraw event is emitted when a user withdraws liquidity
    * before the staking lock period is completed.
@@ -291,12 +287,20 @@ UniswapV4Staking.EarlyWithdraw.handler(async ({ event, context }) => {
   }
 });
 
-onBlock(
+indexer.onBlock(
   {
     name: "DailyUniswapV4StakingRewards",
-    chain: loadedChainId as chain,
-    startBlock: getUniswapV4StakingDeployementBlock(loadedChainId),
-    interval: getPredictedDailyBlockCount(loadedChainId),
+    where: ({ chain }) => {
+      if (chain.id !== loadedChainId) return false;
+      return {
+        block: {
+          number: {
+            _gte: getUniswapV4StakingDeployementBlock(loadedChainId),
+            _every: getPredictedDailyBlockCount(loadedChainId),
+          },
+        },
+      };
+    },
   },
   async ({ block, context }) => {
     /**
@@ -313,6 +317,8 @@ onBlock(
      * `Reward` event is emitted.
      */
 
+    if (context.isPreload) return;
+
     const STAKING_POOL_ENTITY_ID = `${loadedChainId}-${uniswapV4StakingAddress}`;
 
     // Fetch staking pool and associated Uniswap pool. If either doesn't exist, we cannot calculate rewards.
@@ -326,16 +332,17 @@ onBlock(
 
     // Fetch all staked positions for this pool and filter out closed ones.
     const allStakedPositions =
-      await context.StakingPoolV4Position.getWhere.pool_id.eq(
-        STAKING_POOL_ENTITY_ID,
-      );
+      await context.StakingPoolV4Position.getWhere({
+        pool_id: { _eq: STAKING_POOL_ENTITY_ID },
+      });
     const activeStakedPositions = allStakedPositions
       .filter((p) => !p.isPositionClosed)
       .sort((a, b) => a.updatedAtTimestamp - b.updatedAtTimestamp);
     if (activeStakedPositions.length === 0) return;
 
-    const uniPositions =
-      await context.UniswapV4PoolPosition.getWhere.pool_id.eq(uniV4Pool.id);
+    const uniPositions = await context.UniswapV4PoolPosition.getWhere({
+      pool_id: { _eq: uniV4Pool.id },
+    });
 
     // Compute total active liquidity and build list of eligible positions.
     // Only positions that are in-range (active liquidity > 0) qualify for rewards.
@@ -384,8 +391,7 @@ onBlock(
     const merkleLeaves: Array<{ tokenId: bigint; cumulativeReward: bigint }> =
       [];
 
-    for (let i = 0; i < rewardCandidates.length; i++) {
-      const candidate = rewardCandidates[i];
+    for (const candidate of rewardCandidates) {
       const rewardAmount =
         (TOTAL_DAILY_REWARDS * candidate.effectiveLiquidity) /
         totalEffectiveLiquidity;
@@ -459,7 +465,7 @@ onBlock(
   },
 );
 
-UniswapV4Staking.Reward.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4Staking", event: "Reward" }, async ({ event, context }) => {
   /**
    * Reward Event Handler
    * --------------------
@@ -510,8 +516,9 @@ UniswapV4Staking.Reward.handler(async ({ event, context }) => {
   // - `lastDistributedCumulativeReward` / `lastDistributedMerkleRoot` store the values from the most recent
   // successful distribution for this user. This provides a fallback for the frontend if the latest
   // cumulative reward (from a daily calculation) has not yet been distributed on-chain.
-  const pendingRewards =
-    await context.UserCumulativeReward.getWhere.updatedAtTimestamp.eq(0);
+  const pendingRewards = await context.UserCumulativeReward.getWhere({
+    updatedAtTimestamp: { _eq: 0 },
+  });
   if (pendingRewards.length === 0) return;
 
   // Update each pending reward: mark as distributed if merkleRoot matches, otherwise skipped
@@ -536,7 +543,7 @@ UniswapV4Staking.Reward.handler(async ({ event, context }) => {
   }
 });
 
-UniswapV4Staking.RewardsClaimed.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4Staking", event: "RewardsClaimed" }, async ({ event, context }) => {
   /**
    * RewardsClaimed Event Handler
    * -----------------------------
@@ -624,7 +631,7 @@ UniswapV4Staking.RewardsClaimed.handler(async ({ event, context }) => {
   }
 });
 
-UniswapV4Staking.RewardsBurned.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4Staking", event: "RewardsBurned" }, async ({ event, context }) => {
   /**
    * RewardsBurned Event Handler
    * ----------------------------

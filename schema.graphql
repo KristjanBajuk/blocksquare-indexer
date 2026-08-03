@@ -65,7 +65,7 @@ type AssetPair @entity {
 }
 
 type UniswapV2Pool @entity {
-  id: ID!          # pool contract address
+  id: ID! # pool contract address
   assetPairId: String!
   totalSupply: BigInt!
   reserve0: BigInt!

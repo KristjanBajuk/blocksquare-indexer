@@ -1,4 +1,4 @@
-import { Token, TokenHolder, TokenHolderRecord, TokenRecord } from 'generated';
+import type { Token, TokenHolder, TokenHolderRecord, TokenRecord } from 'envio';
 import { getDay, getHour } from './date';
 
 export const getNewToken = (

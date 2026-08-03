@@ -1,8 +1,8 @@
-import { Users } from 'generated';
+import { indexer } from 'envio';
 import { getNewUser } from '../helper/User';
 import { getNewWallet } from '../helper/Wallet';
 
-Users.AddedWallet.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: 'Users', event: 'AddedWallet' }, async ({ event, context }) => {
   const [user, wallet] = await Promise.all([
     context.User.getOrCreate(getNewUser(event.chainId, event.params.user)),
     context.Wallet.getOrCreate(getNewWallet(event.chainId, event.params.wallet)),
@@ -17,7 +17,7 @@ Users.AddedWallet.handler(async ({ event, context }) => {
   }
 });
 
-Users.RemovedWallet.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: 'Users', event: 'RemovedWallet' }, async ({ event, context }) => {
   const wallet = await context.Wallet.getOrThrow(
     `${event.chainId}-${event.params.wallet}`,
     'UsersContract_RemovedWallet_handler: Wallet not found',

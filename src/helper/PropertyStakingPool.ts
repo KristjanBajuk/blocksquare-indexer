@@ -1,15 +1,16 @@
 import { getAddress } from 'ethers';
-import {
-  BigDecimal,
+import { BigDecimal } from 'envio';
+import type {
+  PropertyStakingPool,
   PropertyStakingPoolPosition,
   PropertyStakingPoolRecord,
   TokenDeposit,
-} from 'generated';
+} from 'envio';
 
 import { getDay, getHour } from './date';
 import { getLoadedConfig } from '../config';
-import { PropertyStakingPool } from 'generated/src/Types.gen';
 import { PropertyStakingPoolType } from '../types/enums';
+
 export const getNewPropertyStakingPool = (chainId: number, poolId: string): PropertyStakingPool => {
   return {
     id: `${chainId}-${poolId}`,

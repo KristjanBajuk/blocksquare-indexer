@@ -1,8 +1,8 @@
 import { ZeroAddress } from "ethers";
+import { indexer } from "envio";
 import { getNewWallet } from "../helper/Wallet";
-import { UniswapV4PositionManager } from "generated";
 
-UniswapV4PositionManager.Transfer.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: "UniswapV4PositionManager", event: "Transfer" }, async ({ event, context }) => {
   /**
    * Transfer event is emitted when a position NFT is:
    * - Transferred between wallets
