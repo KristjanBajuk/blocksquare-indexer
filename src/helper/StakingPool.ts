@@ -157,6 +157,8 @@ export const StakingDepositHandler = async (
     getStakingPoolPositionRecord(event.chainId, event.srcAddress, event.params.owner, newIssuedAmount, newStakingPoolData.ratio, event),
   );
 
+  const { start: dayStart } = getDay(event.block.timestamp);
+
   context.StakingPoolTransaction.set({
     id: `${event.chainId}-${event.transaction.hash}-${event.logIndex}`,
     chainId: event.chainId,
@@ -168,6 +170,7 @@ export const StakingDepositHandler = async (
     wallet_id: `${event.chainId}-${event.params.owner}`,
     amount: event.params.inAmount,
     issuedAmount: event.params.outAmount,
+    dayStartTimestamp: dayStart
   });
 };
 
@@ -191,6 +194,8 @@ export const StakingRewardHandler = async (
   context.StakingPool.set(newStakingPoolData);
   context.StakingPoolRecord.set(getStakingPoolRecord(newStakingPoolData, event.block.timestamp));
 
+  const { start: dayStart } = getDay(event.block.timestamp);
+
   context.StakingPoolTransaction.set({
     id: `${event.chainId}-${event.transaction.hash}-${event.logIndex}`,
     chainId: event.chainId,
@@ -202,6 +207,7 @@ export const StakingRewardHandler = async (
     wallet_id: rewardWalletId,
     amount: event.params.amount,
     issuedAmount: undefined,
+    dayStartTimestamp: dayStart
   });
 };
 
@@ -253,6 +259,8 @@ export const StakingWithdrawHandler = async (
     );
   }
 
+  const { start: dayStart } = getDay(event.block.timestamp);
+
   context.StakingPoolTransaction.set({
     id: `${event.chainId}-${event.transaction.hash}-${event.logIndex}`,
     chainId: event.chainId,
@@ -264,5 +272,6 @@ export const StakingWithdrawHandler = async (
     wallet_id: `${event.chainId}-${event.params.owner}`,
     amount: event.params.outAmount,
     issuedAmount: event.params.inAmount,
+    dayStartTimestamp: dayStart
   });
 };

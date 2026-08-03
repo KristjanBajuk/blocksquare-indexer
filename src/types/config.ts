@@ -21,9 +21,10 @@ export type Config = {
     valuationAddress: string;
     type: PropertyStakingPoolType;
   }>;
-  uniswapPoolContracts: Array<{
-    assetPairId: string;
+  uniswapPoolContracts: Record<string, {
     address: string;
+    token0PairId: string;
+    token1PairId: string;
   }>;
   propertyTokenOfferingAddress: string;
   propertyTokenOfferingV2Address: string | null;
