@@ -244,6 +244,7 @@ type PropertyTokenTrade {
   makerTokenFilledAmount: BigInt!
   propertyValuation: BigInt!
   protocol: LimitOrderProtocol!
+  referralCode: String
 }
 
 type PropertyTokenTradeCounts {
@@ -297,6 +298,7 @@ type User {
   chainId: Int!
   wallets: [Wallet!]! @derivedFrom(field: "user")
   certifiedPartners: [UserCertifiedPartner!]! @derivedFrom(field: "user")
+  referrals: [Referral!]! @derivedFrom(field: "referrer")
 }
 
 type UserCertifiedPartner {
@@ -631,6 +633,15 @@ type StakingPoolPositionRecord {
   blockTimestamp: Int! @index
   blockNumber: Int!
   transactionHash: Bytes!
+}
+
+type Referral @entity {
+  id: ID! # chainId-cpAddress-buyerWallet
+  wallet: Wallet!
+  referrer: User!
+  marketplace: CertifiedPartner!
+  firstOrderTrade: PropertyTokenTrade!
+  createdAt: Int!
 }
 
 # ─── Offering V2 ───────────────────────────────────────────────────────────────
