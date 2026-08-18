@@ -1,4 +1,4 @@
-import { Config } from '../types/config';
+import type { Config } from '../types/config';
 import { mainnetConfig } from './mainnet';
 import { testnetConfig } from './testnet';
 

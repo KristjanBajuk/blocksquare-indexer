@@ -1,6 +1,7 @@
 import { getDay, getHour } from './date';
 import { formatTo8Decimals } from './format';
-import { AssetPair, AssetPairPrice, BigDecimal, UniswapV2Pool } from 'generated';
+import { BigDecimal } from 'envio';
+import type { AssetPair, AssetPairPrice, UniswapV2Pool } from 'envio';
 
 /**
  * Generic function to calculate and store USD price for any BST/TOKEN pair
@@ -79,7 +80,15 @@ export const getLPAssetPairData = (
   );
   return {
     assetPairPrice: getNewAssetPairPrice(
-      pool.id, timestamp, blockNumber, logIndex, lpPairId, formattedBI, formatted, dayStart, hourStart,
+      pool.id,
+      timestamp,
+      blockNumber,
+      logIndex,
+      lpPairId,
+      formattedBI,
+      formatted,
+      dayStart,
+      hourStart,
     ),
     assetPair: {
       id: lpPairId,

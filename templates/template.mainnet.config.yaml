@@ -1,6 +1,4 @@
 name: Blocksquare
-preload_handlers: true
-unordered_multichain_mode: true
 field_selection:
   transaction_fields:
     - 'hash'
@@ -155,7 +153,7 @@ contracts:
     handler: src/handler/PriceFeedDataHandler.ts
     events:
       - event: AnswerUpdated
-networks:
+chains:
   - id: <%= config.chainId %>
     start_block: <%= config.startBlock %>
     contracts:
@@ -183,11 +181,6 @@ networks:
       - name: PropertyTokenOffering
         address:
           - <%= config.propertyTokenOfferingAddress %>
-      <% if (config.propertyTokenOfferingV2Address) { %>
-      - name: PropertyTokenOfferingV2
-        address:
-          - <%= config.propertyTokenOfferingV2Address %>
-      <% } %>
       - name: PropertyFactory
         address:
           - <%= config.propertyFactoryAddress %>

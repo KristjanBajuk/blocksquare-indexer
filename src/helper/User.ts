@@ -1,4 +1,4 @@
-import { User } from 'generated';
+import type { User } from 'envio';
 
 export const getNewUser = (chainId: number, userId: string): User => {
   return {

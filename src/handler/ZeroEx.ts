@@ -1,8 +1,8 @@
-import { ZeroEx } from 'generated';
+import { indexer } from 'envio';
 import { updatePropertyTokenTradeCounts } from '../helper/LimitOrderTrades';
 import { LimitOrderProtocol } from '../types/enums';
 
-ZeroEx.LimitOrderFilled.handler(async ({ event, context }) => {
+indexer.onEvent({ contract: 'ZeroEx', event: 'LimitOrderFilled' }, async ({ event, context }) => {
   // Check if either makerToken or takerToken is a property token
   const [makerPropertyToken, takerPropertyToken] = await Promise.all([
     context.PropertyToken.get(`${event.chainId}-${event.params.makerToken}`),
@@ -13,7 +13,6 @@ ZeroEx.LimitOrderFilled.handler(async ({ event, context }) => {
   const propertyToken = makerPropertyToken || takerPropertyToken;
   if (!propertyToken) return;
 
-  // Create PropertyTokenTrade record
   context.PropertyTokenTrade.set({
     id: `${event.chainId}-${propertyToken.contractAddress}-${event.transaction.hash}-${event.logIndex}`,
     chainID: event.chainId,
@@ -30,6 +29,7 @@ ZeroEx.LimitOrderFilled.handler(async ({ event, context }) => {
     makerTokenFilledAmount: event.params.makerTokenFilledAmount,
     propertyValuation: propertyToken.propertyValuation,
     protocol: LimitOrderProtocol.ZeroEx,
+    referralCode: '',
   });
 
   // Handle case where property token is on maker side (being sold)

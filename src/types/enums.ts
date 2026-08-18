@@ -10,6 +10,14 @@ export enum LimitOrderProtocol {
   OneInch = 'OneInch',
 }
 
+export enum StakingPoolV4PositionRecordType {
+  DEPOSIT = 'DEPOSIT',
+  WITHDRAW = 'WITHDRAW',
+  EARLY_WITHDRAW = 'EARLY_WITHDRAW',
+  REWARDS_CLAIMED = 'REWARDS_CLAIMED',
+  REWARDS_BURNED = 'REWARDS_BURNED',
+}
+
 export enum PropertyStakingPoolTransactionType {
   DEPOSIT = 'DEPOSIT',
   WITHDRAW = 'WITHDRAW',
@@ -17,11 +25,9 @@ export enum PropertyStakingPoolTransactionType {
 }
 
 export enum MarketplacePoolTransactionType {
-  CP_INITIALIZED = 'CP_INITIALIZED',
   DEPOSIT = 'DEPOSIT',
   WITHDRAW = 'WITHDRAW',
   REWARD = 'REWARD',
-  LIQUIDATE_CP_COLLATERAL = 'LIQUIDATE_CP_COLLATERAL',
 }
 
 export enum StakingPoolTransactionType {

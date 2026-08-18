@@ -1,5 +1,5 @@
 import { getAddress } from 'ethers';
-import { Config } from '../types/config';
+import type { Config } from '../types/config';
 import { PropertyStakingPoolType } from '../types/enums';
 
 export const testnetConfig: Config = {
@@ -19,7 +19,9 @@ export const testnetConfig: Config = {
   propertyFactoryAddress: getAddress('0x67b899af3f27072f15f22bb33e5f1df2696cafcb'),
   propertyRegistryAddress: getAddress('0x0be43cfd32a91cc277489b547598b6428ef9a584'),
   propertyRevenueDistributionAddress: getAddress('0x2fbCff66275e193CfFB6dB6e18278B4A64d74D8f'),
-  legacyPropertyRevenueDistributionAddress: getAddress('0xbc9bf93d96096F42364DBD2c2b32a317fd06C8cB'),
+  legacyPropertyRevenueDistributionAddress: getAddress(
+    '0xbc9bf93d96096F42364DBD2c2b32a317fd06C8cB',
+  ),
   propertyStakingContracts: [
     // Community Staking Pool
     {
@@ -60,4 +62,7 @@ export const testnetConfig: Config = {
   zeroExAddress: getAddress('0xdef1c0ded9bec7f1a1670819833240f027b25eff'),
   zeroExStartBlock: 0,
   oneInchPostInteractionAddress: getAddress('0xf578feD7b233fca3D227cE9e9A0f60073eE07170'),
+  uniswapV4PoolManagerAddress: getAddress('0xE03A1074c86CFeDd5C142C4F04F1a1536e203543'),
+  uniswapV4PositionManagerAddress: getAddress('0x429ba70129df741B2Ca2a85BC3A2a3328e5c09b4'),
+  uniswapV4StakingAddress: getAddress('0xfdf22B183490f005e2e51A6Caf4202E46cc11b97'),
 };
