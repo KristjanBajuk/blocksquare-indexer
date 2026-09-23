@@ -2,8 +2,14 @@ process.env.ENVIO_NETWORK = 'testnet';
 
 import { describe, it, beforeEach } from 'vitest';
 import { createTestIndexer, type TestIndexer, type TestIndexerProcessConfig } from 'envio';
-import { AbiCoder, keccak256, ZeroAddress } from 'ethers';
+import { AbiCoder, concat, keccak256, ZeroAddress } from 'ethers';
 import { CHAIN_ID, addr } from './fixtures';
+import {
+  buildMerkleTree,
+  getPredictedDailyBlockCount,
+  getUniswapV4StakingDeployementBlock,
+  TOTAL_DAILY_REWARDS,
+} from '../src/helper/UniswapV4Helpers/utils';
 
 type ChainSimulate = NonNullable<
   NonNullable<TestIndexerProcessConfig['chains'][typeof CHAIN_ID]>['simulate']
@@ -229,5 +235,284 @@ describe('UniswapV4Staking', () => {
     t.expect(position.timeBoost).toBe(150n);
     t.expect(await indexer.StakingPoolV4Position.getAll()).toHaveLength(1);
     t.expect(await indexer.StakingPoolV4PositionRecord.getAll()).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Daily reward trees. The contract only verifies proofs against its single latest
+// root and tracks claims per tokenId, so every NFT that has ever earned must be in
+// every tree, keyed by tokenId.
+//
+// Each test runs one `process()` call: the test indexer can't resume a chain whose
+// config has contracts starting before the resumed block (e.g. ZeroEx). Trees are
+// read back per block from the returned changes.
+// ---------------------------------------------------------------------------
+
+const DEPLOY_BLOCK = getUniswapV4StakingDeployementBlock(CHAIN_ID);
+const DAY_BLOCKS = getPredictedDailyBlockCount(CHAIN_ID);
+const dayBlock = (day: number) => DEPLOY_BLOCK + (day - 1) * DAY_BLOCKS;
+
+const BOB = addr('0x7777777777777777777777777777777777777777');
+const CAROL = addr('0x8888888888888888888888888888888888888888');
+const DAVE = addr('0x9999999999999999999999999999999999999999');
+// Smart-wallet case: claims arrive through a relayer, not from the NFT holder.
+const RELAYER = addr('0x5555555555555555555555555555555555555555');
+
+// #43 has a narrow range and leaves it when the pool tick moves to 120; the others stay in range.
+const WIDE_RANGE = { tickLower: -600n, tickUpper: 600n };
+const NARROW_RANGE = { tickLower: -60n, tickUpper: 60n };
+const OUT_OF_NARROW_RANGE_TICK = 120n;
+
+const THIRD = TOTAL_DAILY_REWARDS / 3n;
+const HALF = TOTAL_DAILY_REWARDS / 2n;
+const FULL = TOTAL_DAILY_REWARDS;
+
+const rewardId = (tokenId: bigint) => `${CHAIN_ID}-${tokenId}`;
+const wallet = (address: string) => `${CHAIN_ID}-${address}`;
+
+// Root the operator would publish for these totals.
+const rootOf = (totals: Record<string, bigint>) =>
+  buildMerkleTree(
+    Object.entries(totals)
+      .map(([tokenId, cumulativeReward]) => ({ tokenId: BigInt(tokenId), cumulativeReward }))
+      .sort((a, b) => (a.tokenId < b.tokenId ? -1 : 1)),
+  ).root;
+
+// Mirrors the contract: leaf = keccak256(abi.encode(tokenId, cumulative)), solady MerkleProofLib (sorted pairs).
+const verifyProof = (proof: readonly string[], root: string, tokenId: bigint, cumulative: bigint) => {
+  let node = keccak256(AbiCoder.defaultAbiCoder().encode(['uint256', 'uint256'], [tokenId, cumulative]));
+  for (const sibling of proof) {
+    node = BigInt(node) < BigInt(sibling) ? keccak256(concat([node, sibling])) : keccak256(concat([sibling, node]));
+  }
+  return node === root;
+};
+
+const txAt = (blockNumber: number, from: `0x${string}`) => ({
+  block: { number: blockNumber, timestamp: 1_700_000_000 + blockNumber },
+  transaction: { hash: `0x${blockNumber.toString(16).padStart(64, '0')}`, from },
+});
+
+const stakingEvent = (
+  event: 'Deposit' | 'Withdraw' | 'EarlyWithdraw' | 'Reward' | 'RewardsClaimed' | 'RewardsBurned',
+  blockNumber: number,
+  params: Record<string, unknown>,
+  from: `0x${string}` = RELAYER,
+) => ({ contract: 'UniswapV4Staking', event, ...txAt(blockNumber, from), params }) as unknown as ChainSimulate[number];
+
+const deposit = (blockNumber: number, owner: `0x${string}`, tokenId: bigint) =>
+  stakingEvent('Deposit', blockNumber, { owner, tokenId, liquidity: 10n ** 18n, lockedUntil: 1_800_000_000n, timeBoost: 100n }, owner);
+const publishRoot = (blockNumber: number, merkleRoot: string) =>
+  stakingEvent('Reward', blockNumber, { from: RELAYER, amount: FULL, merkleRoot });
+const claim = (blockNumber: number, tokenId: bigint, amount: bigint) =>
+  stakingEvent('RewardsClaimed', blockNumber, { tokenId, amount });
+const swapToTick = (blockNumber: number, tick: bigint) =>
+  ({
+    contract: 'UniswapV4PoolManager',
+    event: 'Swap',
+    ...txAt(blockNumber, RELAYER),
+    params: { id: POOL_ID, sender: RELAYER, amount0: 1n, amount1: -1n, sqrtPriceX96: 79228162514264337593543950336n, liquidity: 10n ** 18n, tick, fee: 3000n },
+  }) as unknown as ChainSimulate[number];
+const nftTransfer = (blockNumber: number, from: `0x${string}`, to: `0x${string}`, id: bigint) =>
+  ({ contract: 'UniswapV4PositionManager', event: 'Transfer', ...txAt(blockNumber, from), params: { from, to, id } }) as unknown as ChainSimulate[number];
+
+type Changes = Awaited<ReturnType<TestIndexer['process']>>['changes'];
+const rewardSetsAt = (changes: Changes, block: number) =>
+  changes.find((c) => c.block === block)?.UserCumulativeReward?.sets ?? [];
+
+describe('UniswapV4Staking daily reward trees', () => {
+  let indexer: TestIndexer;
+
+  const setNft = (tokenId: bigint, owner: `0x${string}`, range: { tickLower: bigint; tickUpper: bigint }) => {
+    indexer.UniswapV4PositionToken.set({
+      id: rewardId(tokenId),
+      tokenId,
+      owner,
+      isBurned: false,
+      mintedTransactionHash: '',
+      wallet_id: wallet(owner),
+      position_id: `uni-${tokenId}`,
+    });
+    indexer.UniswapV4PoolPosition.set({
+      id: `uni-${tokenId}`,
+      uniqueKey: `uni-${tokenId}`,
+      chainId: CHAIN_ID,
+      ...range,
+      liquidityDelta: 10n ** 18n,
+      salt: '',
+      amount0: 0n,
+      amount1: 0n,
+      transactionHash: '',
+      pool_id: UNI_POOL_ENTITY_ID,
+    });
+  };
+
+  const run = async (endBlock: number, ...events: ChainSimulate) =>
+    (await indexer.process({ chains: { [CHAIN_ID]: { endBlock, simulate: events } } })).changes;
+
+  const rewards = async () =>
+    new Map((await indexer.UserCumulativeReward.getAll()).map((r) => [r.tokenId, r]));
+
+  // A daily run's tree: one leaf per NFT with a nonzero total, every proof valid against the root.
+  const expectTree = (
+    t: { expect: typeof import('vitest').expect },
+    changes: Changes,
+    day: number,
+    expected: Record<string, bigint>,
+  ) => {
+    const root = rootOf(expected);
+    const sets = rewardSetsAt(changes, dayBlock(day));
+    t.expect(Object.fromEntries(sets.map((r) => [r.tokenId.toString(), r.cumulativeReward]))).toEqual(expected);
+    t.expect(new Set(sets.map((r) => r.tokenId)).size).toBe(sets.length);
+    for (const r of sets) {
+      t.expect(r.id).toBe(rewardId(r.tokenId));
+      t.expect(r.merkleRoot).toBe(root);
+      t.expect(r.updatedAtTimestamp).toBe(0);
+      t.expect(verifyProof(r.proof, root, r.tokenId, r.cumulativeReward)).toBe(true);
+    }
+  };
+
+  beforeEach(() => {
+    indexer = createTestIndexer();
+    indexer.UniswapV4Pool.set({
+      id: UNI_POOL_ENTITY_ID,
+      chainId: CHAIN_ID,
+      poolId: POOL_ID,
+      currency0: ZERO,
+      currency1: BST_ADDRESS,
+      fee: 3000n,
+      tickSpacing: 60n,
+      hooks: ZERO,
+      sqrtPriceX96: 79228162514264337593543950336n,
+      tick: 0n,
+      createdAtTimestamp: 1_699_999_000,
+      creationTransaction: `0x${'ee'.repeat(32)}`,
+    });
+    indexer.StakingPoolV4.set({
+      id: STAKING_POOL_ENTITY_ID,
+      chainId: CHAIN_ID,
+      contractAddress: STAKING_ADDRESS,
+      positionManager: POSITION_MANAGER_ADDRESS,
+      targetPoolKey: POOL_ID,
+      minDays: 7n,
+      maxDays: 365n,
+      minBoost: 100n,
+      maxBoost: 200n,
+      earlyPositionSlash: 10n,
+      earlyRewardSlash: 50n,
+      totalRewardsAdded: 0n,
+      totalRewardsClaimed: 0n,
+      totalRewardsBurned: 0n,
+      createdAtTimestamp: 1_699_999_000,
+      creationTransaction: `0x${'bb'.repeat(32)}`,
+      uniswapV4Pool_id: UNI_POOL_ENTITY_ID,
+    });
+    setNft(42n, ALICE, WIDE_RANGE);
+    setNft(43n, BOB, NARROW_RANGE);
+    setNft(44n, CAROL, WIDE_RANGE);
+  });
+
+  it('keeps every NFT claimable across out-of-range days, withdrawals and resales', async (t) => {
+    const day1 = { '42': THIRD, '43': THIRD, '44': THIRD };
+    const day2 = { '42': THIRD + HALF, '43': THIRD, '44': THIRD + HALF };
+    const day3 = { '42': THIRD + HALF, '43': THIRD + FULL, '44': THIRD + HALF };
+    const day4 = { '42': THIRD + HALF, '43': THIRD + FULL + HALF, '44': THIRD + HALF + HALF };
+    const [r1, r2, r3, r4] = [day1, day2, day3, day4].map(rootOf);
+
+    const changes = await run(
+      dayBlock(4) + 10,
+      // Step 1: all three staked and in range for day 1.
+      deposit(dayBlock(1) - 30, ALICE, 42n),
+      deposit(dayBlock(1) - 20, BOB, 43n),
+      deposit(dayBlock(1) - 10, CAROL, 44n),
+      // Step 2: publish R1; Carol claims #44 through a relayer.
+      publishRoot(dayBlock(1) + 10, r1!),
+      claim(dayBlock(1) + 11, 44n, THIRD),
+      // Step 3: #43 goes out of range before day 2.
+      swapToTick(dayBlock(1) + 20, OUT_OF_NARROW_RANGE_TICK),
+      // Step 4: publish R2; Bob claims his carried-forward #43.
+      publishRoot(dayBlock(2) + 10, r2!),
+      claim(dayBlock(2) + 11, 43n, THIRD),
+      // Step 5: Alice early-withdraws #42 unclaimed; Carol withdraws #44 and sells it to Dave; #43 back in range.
+      stakingEvent('EarlyWithdraw', dayBlock(2) + 20, { owner: ALICE, tokenId: 42n, liquidity: 10n ** 18n, positionSlash: 0n }, ALICE),
+      stakingEvent('Withdraw', dayBlock(2) + 21, { owner: CAROL, tokenId: 44n, liquidity: 10n ** 18n }, CAROL),
+      nftTransfer(dayBlock(2) + 22, CAROL, DAVE, 44n),
+      swapToTick(dayBlock(2) + 23, 0n),
+      // Step 6: publish R3; Alice claims #42 after withdrawing.
+      publishRoot(dayBlock(3) + 10, r3!),
+      claim(dayBlock(3) + 11, 42n, THIRD + HALF),
+      // Step 7: Dave stakes #44.
+      deposit(dayBlock(3) + 20, DAVE, 44n),
+      // Step 8: publish R4.
+      publishRoot(dayBlock(4) + 10, r4!),
+    );
+
+    expectTree(t, changes, 1, day1);
+    expectTree(t, changes, 2, day2); // #43 carried while out of range
+    expectTree(t, changes, 3, day3); // withdrawn #42 and resold #44 carried
+    expectTree(t, changes, 4, day4); // Dave continues the same #44 record
+
+    // Step 4: Bob's carried-forward leaf was distributed under R2 with a valid proof.
+    const bobAtR2 = rewardSetsAt(changes, dayBlock(2) + 10).find((r) => r.tokenId === 43n)!;
+    t.expect(bobAtR2.isRewardsDistributed).toBe(true);
+    t.expect(bobAtR2.lastDistributedMerkleRoot).toBe(r2);
+    t.expect(verifyProof(bobAtR2.lastDistributedProof, r2!, 43n, THIRD)).toBe(true);
+
+    // Step 6: Alice's withdrawn #42 was distributed under R3 with its full total.
+    const aliceAtR3 = rewardSetsAt(changes, dayBlock(3) + 10).find((r) => r.tokenId === 42n)!;
+    t.expect(aliceAtR3.lastDistributedCumulativeReward).toBe(THIRD + HALF);
+    t.expect(verifyProof(aliceAtR3.lastDistributedProof, r3!, 42n, THIRD + HALF)).toBe(true);
+
+    // Claims land on the tokenId record and name the staker or holder, not the relayer.
+    const claims = (await indexer.StakingPoolV4PositionRecord.getAll()).filter((r) => r.transactionType === 'REWARDS_CLAIMED');
+    t.expect(Object.fromEntries(claims.map((r) => [r.tokenId.toString(), [r.wallet_id, r.stakingPosition_id]]))).toEqual({
+      '42': [wallet(ALICE), `${CHAIN_ID}-${ALICE}-42`],
+      '43': [wallet(BOB), `${CHAIN_ID}-${BOB}-43`],
+      '44': [wallet(CAROL), `${CHAIN_ID}-${CAROL}-44`],
+    });
+
+    // Steps 8-9: everything is distributed under R4; pending = cumulative − claimed per tokenId.
+    const final = await rewards();
+    t.expect(final.size).toBe(3);
+    t.expect([...final.values()].every((r) => r.isRewardsDistributed && r.lastDistributedMerkleRoot === r4)).toBe(true);
+    const pending = (tokenId: bigint) => final.get(tokenId)!.lastDistributedCumulativeReward - final.get(tokenId)!.claimed;
+    t.expect(final.get(44n)!.wallet_id).toBe(wallet(DAVE));
+    t.expect(pending(44n)).toBe(HALF + HALF); // Carol's unclaimed day 2 + Dave's day 4
+    t.expect(pending(43n)).toBe(FULL + HALF);
+    t.expect(pending(42n)).toBe(0n);
+
+    // Conservation: four daily pools, minus at most one wei of dust per earner per run.
+    const total = [...final.values()].reduce((sum, r) => sum + r.cumulativeReward, 0n);
+    t.expect(total <= 4n * FULL).toBe(true);
+    t.expect(4n * FULL - total <= 3n + 2n + 2n + 2n).toBe(true);
+  });
+
+  it('does not produce a new root when no staked position is in range', async (t) => {
+    const r1 = rootOf({ '43': FULL });
+    const changes = await run(
+      dayBlock(2),
+      deposit(dayBlock(1) - 10, BOB, 43n),
+      publishRoot(dayBlock(1) + 10, r1),
+      swapToTick(dayBlock(1) + 20, OUT_OF_NARROW_RANGE_TICK),
+    );
+
+    t.expect(rewardSetsAt(changes, dayBlock(2))).toHaveLength(0);
+    const record = (await rewards()).get(43n)!;
+    t.expect(record.cumulativeReward).toBe(FULL);
+    t.expect(record.merkleRoot).toBe(r1);
+    t.expect(record.isRewardsDistributed).toBe(true);
+  });
+
+  it('burns update the tokenId record even when sent by an unrelated address', async (t) => {
+    await run(
+      dayBlock(1) + 1,
+      deposit(dayBlock(1) - 10, ALICE, 42n),
+      stakingEvent('RewardsBurned', dayBlock(1) + 1, { tokenId: 42n, amount: 5n }),
+    );
+
+    const records = await indexer.UserCumulativeReward.getAll();
+    t.expect(records.map((r) => [r.id, r.burned])).toEqual([[rewardId(42n), 5n]]);
+    const burn = (await indexer.StakingPoolV4PositionRecord.getAll()).find((r) => r.transactionType === 'REWARDS_BURNED');
+    t.expect(burn?.wallet_id).toBe(wallet(ALICE));
+    t.expect(burn?.stakingPosition_id).toBe(`${CHAIN_ID}-${ALICE}-42`);
   });
 });

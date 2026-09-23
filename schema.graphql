@@ -754,7 +754,8 @@ type StakingPoolV4PositionRecord {
 }
 
 type UserCumulativeReward {
-  id: ID! # ${stakingPoolId}-${walletAddress}
+  id: ID! # ${chainId}-${tokenId}. Rewards belong to the NFT, matching the contract's per-tokenId claim tracking.
+  tokenId: BigInt! @index
   cumulativeReward: BigInt!
   claimed: BigInt!
   burned: BigInt!
@@ -768,7 +769,7 @@ type UserCumulativeReward {
   isRewardsDistributed: Boolean!
   distributionSkipped: Boolean!
   wallet: Wallet!
-  stakingPool: StakingPoolV4!
+  stakingPool: StakingPoolV4! @index
   uniPosition: UniswapV4PoolPosition!
 }
 
