@@ -3,7 +3,6 @@ import { indexer } from "envio";
 import type { EvmOnEventContext, UniswapV4PositionToken, UserCumulativeReward } from "envio";
 import { getDay, getHour } from "../helper/date";
 import { getLoadedConfig } from "../config";
-import { ethers, id } from "ethers";
 import {
   BOOST_PRECISION,
   buildMerkleTree,
@@ -516,19 +515,14 @@ indexer.onBlock(
 
     // Rewrite every record in the tree with the new root and a fresh proof, marked pending
     // (updatedAtTimestamp = 0) until the `Reward` event publishes this root.
-    for (const record of updatedRecords) {
-      const leaf = ethers.keccak256(
-        ethers.AbiCoder.defaultAbiCoder().encode(
-          ["uint256", "uint256"],
-          [record.tokenId, record.cumulativeReward],
-        ),
-      );
-
+    // Leaves are in `updatedRecords` order, so each proof is looked up by index: looking it up
+    // by leaf hash scans every leaf per record, which is quadratic (~20s at 50k records).
+    for (const [index, record] of updatedRecords.entries()) {
       context.UserCumulativeReward.set({
         ...record,
         updatedAtTimestamp: 0,
         merkleRoot,
-        proof: tree.getHexProof(leaf),
+        proof: tree.getHexProof(tree.getLeaf(index), index),
         isRewardsDistributed: false,
         distributionSkipped: false,
         blockNumber: block.number,
