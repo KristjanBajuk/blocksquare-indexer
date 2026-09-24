@@ -485,6 +485,19 @@ describe('UniswapV4Staking daily reward trees', () => {
     const total = [...final.values()].reduce((sum, r) => sum + r.cumulativeReward, 0n);
     t.expect(total <= 4n * FULL).toBe(true);
     t.expect(4n * FULL - total <= 3n + 2n + 2n + 2n).toBe(true);
+
+    // One reward tree per daily run, each marked published by its Reward event.
+    const sum = (totals: Record<string, bigint>) => Object.values(totals).reduce((a, b) => a + b, 0n);
+    const trees = (await indexer.StakingPoolV4RewardTree.getAll()).sort((a, b) => a.blockNumber - b.blockNumber);
+    t.expect(trees.map((tree) => tree.merkleRoot)).toEqual([r1, r2, r3, r4]);
+    t.expect(trees.map((tree) => tree.blockNumber)).toEqual([1, 2, 3, 4].map(dayBlock));
+    t.expect(trees.map((tree) => tree.leafCount)).toEqual([3, 3, 3, 3]);
+    t.expect(trees.map((tree) => tree.totalCumulativeReward)).toEqual([day1, day2, day3, day4].map(sum));
+    t.expect(trees.map((tree) => tree.dailyReward)).toEqual([3n * THIRD, 2n * HALF, FULL, 2n * HALF]);
+    t.expect(trees.every((tree) => tree.isPublished && tree.publishedAmount === FULL)).toBe(true);
+    t.expect(trees.map((tree) => tree.publishedTransactionHash)).toEqual(
+      [1, 2, 3, 4].map((day) => `0x${(dayBlock(day) + 10).toString(16).padStart(64, '0')}`),
+    );
   });
 
   it('does not produce a new root when no staked position is in range', async (t) => {
@@ -497,6 +510,7 @@ describe('UniswapV4Staking daily reward trees', () => {
     );
 
     t.expect(rewardSetsAt(changes, dayBlock(2))).toHaveLength(0);
+    t.expect((await indexer.StakingPoolV4RewardTree.getAll()).map((tree) => tree.merkleRoot)).toEqual([r1]);
     const record = (await rewards()).get(43n)!;
     t.expect(record.cumulativeReward).toBe(FULL);
     t.expect(record.merkleRoot).toBe(r1);
@@ -515,6 +529,11 @@ describe('UniswapV4Staking daily reward trees', () => {
     const burn = (await indexer.StakingPoolV4PositionRecord.getAll()).find((r) => r.transactionType === 'REWARDS_BURNED');
     t.expect(burn?.wallet_id).toBe(wallet(ALICE));
     t.expect(burn?.stakingPosition_id).toBe(`${CHAIN_ID}-${ALICE}-42`);
+
+    // The day 1 tree was never published.
+    const [tree] = await indexer.StakingPoolV4RewardTree.getAll();
+    t.expect(tree?.isPublished).toBe(false);
+    t.expect(tree?.publishedAmount).toBeUndefined();
   });
 
   it('a resold, unstaked NFT is claimed by its new holder', async (t) => {

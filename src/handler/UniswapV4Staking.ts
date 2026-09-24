@@ -488,6 +488,23 @@ indexer.onBlock(
         blockNumber: block.number,
       });
     }
+
+    // One entity per tree, so the operator can read the latest root and how much it needs
+    // funding with a single query.
+    context.StakingPoolV4RewardTree.set({
+      id: `${STAKING_POOL_ENTITY_ID}-${block.number}`,
+      chainId: loadedChainId,
+      merkleRoot,
+      blockNumber: block.number,
+      leafCount: updatedRecords.length,
+      totalCumulativeReward: updatedRecords.reduce((sum, r) => sum + r.cumulativeReward, 0n),
+      dailyReward: [...earners.values()].reduce((sum, e) => sum + e.share, 0n),
+      isPublished: false,
+      publishedAtTimestamp: undefined,
+      publishedTransactionHash: undefined,
+      publishedAmount: undefined,
+      pool_id: STAKING_POOL_ENTITY_ID,
+    });
   },
 );
 
@@ -502,6 +519,7 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "Reward" }, async ({ even
    * 2. Records an hourly/daily aggregate record for the pool.
    * 3. Marks all pending cumulative reward records as either distributed (if their merkle root matches)
    *    or skipped (if they belong to a different root). Pending records are those with updatedAtTimestamp = 0.
+   * 4. Marks the reward tree with this root as published.
    */
   const {
     chainId,
@@ -535,6 +553,21 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "Reward" }, async ({ even
     transactionHash: hash,
     merkleRoot,
   });
+
+  // Mark the tree this root came from as published.
+  const publishedTrees = await context.StakingPoolV4RewardTree.getWhere({
+    merkleRoot: { _eq: merkleRoot },
+    pool_id: { _eq: stakingPool.id },
+  });
+  for (const tree of publishedTrees) {
+    context.StakingPoolV4RewardTree.set({
+      ...tree,
+      isPublished: true,
+      publishedAtTimestamp: timestamp,
+      publishedTransactionHash: hash,
+      publishedAmount: amount,
+    });
+  }
 
   // Fetch all pending cumulative reward records.
   // A pending record has updatedAtTimestamp = 0, meaning it was created
