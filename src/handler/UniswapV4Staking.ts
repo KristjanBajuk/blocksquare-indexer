@@ -1,11 +1,12 @@
 import { getNewWallet } from "../helper/Wallet";
 import { indexer } from "envio";
-import type { EvmOnEventContext, UniswapV4PositionToken, UserCumulativeReward } from "envio";
+import type { UserCumulativeReward } from "envio";
 import { getDay, getHour } from "../helper/date";
 import { getLoadedConfig } from "../config";
 import {
   BOOST_PRECISION,
   buildMerkleTree,
+  compareBigInt,
   computeV4PoolId,
   getPredictedDailyBlockCount,
   getUniswapV4StakingDeployementBlock,
@@ -13,47 +14,13 @@ import {
 } from "../helper/UniswapV4Helpers/utils";
 import { calculateActiveLiquidity } from "../helper/UniswapV4Helpers/liquidityAmounts";
 import { StakingPoolV4PositionRecordType } from "../types/enums";
+import {
+  getNewUserCumulativeReward,
+  getRewardRecordId,
+  recordRewardPayout,
+} from "../helper/UniswapV4Staking";
 
 const { uniswapV4StakingAddress, chainId: loadedChainId } = getLoadedConfig();
-
-/**
- * Cumulative rewards belong to the NFT, not to the wallet that staked it: the contract
- * verifies leaves of (tokenId, cumulativeReward) and tracks `totalClaimedRewards[tokenId]`.
- * Keying the record by tokenId keeps the total intact across withdrawals and resales.
- */
-const getRewardRecordId = (chainId: number, tokenId: bigint) => `${chainId}-${tokenId}`;
-
-/**
- * Resolves who a claim/burn for `tokenId` belongs to. The events only carry the tokenId,
- * and `transaction.from` can be a relayer or bundler, so it cannot be used.
- * - Staked: the staker of the open position.
- * - Unstaked: the current NFT holder; the history record links the latest closed position.
- */
-const resolveRewardOwner = async (
-  context: EvmOnEventContext,
-  chainId: number,
-  stakingPoolId: string,
-  positionToken: UniswapV4PositionToken,
-) => {
-  const stakingPositions = (
-    await context.StakingPoolV4Position.getWhere({ tokenId: { _eq: positionToken.tokenId } })
-  )
-    .filter((p) => p.pool_id === stakingPoolId)
-    .sort((a, b) => b.updatedAtTimestamp - a.updatedAtTimestamp);
-
-  const openPosition = stakingPositions.find((p) => !p.isPositionClosed);
-  // The history record links to the position that earned the rewards: the open one, or else the
-  // latest closed one. After a resale, a holder who hasn't staked yet (e.g. Dave claiming #44)
-  // has no position of their own, so the claim links to the seller's closed position while
-  // `walletId` names the holder.
-  const stakingPosition = openPosition ?? stakingPositions[0];
-
-  return {
-    walletId: openPosition?.wallet_id ?? positionToken.wallet_id,
-    stakingPositionId:
-      stakingPosition?.id ?? `${chainId}-${positionToken.owner}-${positionToken.tokenId}`,
-  };
-};
 
 indexer.onEvent({ contract: "UniswapV4Staking", event: "LPStakingInit" }, async ({ event, context }) => {
   /**
@@ -376,15 +343,16 @@ indexer.onBlock(
     /**
      * DailyRewards Handler
      * ---------------------
-     * This onBlock handler runs once per day (based on chain block time) to calculate
-     * cumulative rewards for all active staked positions in the Uniswap V4 staking pool.
+     * This onBlock handler runs once per day (based on chain block time) and builds the
+     * reward Merkle tree for the Uniswap V4 staking pool.
      *
-     * It computes each user's share of the daily reward pool based on the active liquidity
-     * (in-range positions) of their staked Uniswap V4 position. A Merkle tree is built
-     * from the cumulative rewards (tokenId + cumulativeReward) and the root is stored.
-     * Each user's cumulative reward record is updated with the new total and linked to
-     * the current Merkle root. These records are later marked as distributed when the
-     * `Reward` event is emitted.
+     * Today's reward pool is split between open, in-range staked positions by active
+     * liquidity × time boost, and each share is added to that NFT's cumulative reward
+     * record (one record per NFT, keyed by tokenId). The tree covers every NFT that has
+     * ever earned: records that didn't earn today carry forward unchanged, because the
+     * contract only accepts proofs against its latest root. Every record in the tree is
+     * rewritten with the new root and its proof, and later marked as distributed when
+     * the `Reward` event publishes that root.
      */
 
     if (context.isPreload) return;
@@ -454,15 +422,12 @@ indexer.onBlock(
     // the previous one stays valid on-chain.
     if (totalEffectiveLiquidity === 0n) return;
 
-    // Today's share per NFT, keyed by reward record ID.
-    const dailyShares = new Map<string, bigint>();
-    const earnersByRecordId = new Map<string, (typeof rewardCandidates)[0]>();
+    // Today's earners, keyed by reward record ID, with their share of the daily pool.
+    const earners = new Map<string, { candidate: (typeof rewardCandidates)[0]; share: bigint }>();
     for (const candidate of rewardCandidates) {
       const recordId = getRewardRecordId(loadedChainId, candidate.stakedPosition.tokenId);
-      const rewardAmount =
-        (TOTAL_DAILY_REWARDS * candidate.effectiveLiquidity) / totalEffectiveLiquidity;
-      dailyShares.set(recordId, (dailyShares.get(recordId) ?? 0n) + rewardAmount);
-      earnersByRecordId.set(recordId, candidate);
+      const share = (TOTAL_DAILY_REWARDS * candidate.effectiveLiquidity) / totalEffectiveLiquidity;
+      earners.set(recordId, { candidate, share: (earners.get(recordId)?.share ?? 0n) + share });
     }
 
     // The contract only accepts proofs against the latest root, so every NFT that has
@@ -475,58 +440,49 @@ indexer.onBlock(
       existingRecords.map((record) => [record.id, record]),
     );
 
-    for (const [recordId, candidate] of earnersByRecordId) {
+    for (const [recordId, { candidate }] of earners) {
       if (recordsById.has(recordId)) continue;
-      recordsById.set(recordId, {
-        id: recordId,
-        tokenId: candidate.stakedPosition.tokenId,
-        cumulativeReward: 0n,
-        lastDistributedCumulativeReward: 0n,
-        updatedAtTimestamp: 0,
-        merkleRoot: "",
-        lastDistributedMerkleRoot: "",
-        isRewardsDistributed: false,
-        distributionSkipped: false,
-        blockNumber: block.number,
-        wallet_id: candidate.stakedPosition.wallet_id,
-        stakingPool_id: STAKING_POOL_ENTITY_ID,
-        uniPosition_id: candidate.uniPosition.id,
-        proof: [],
-        lastDistributedProof: [],
-        claimed: 0n,
-        burned: 0n,
-      });
+      recordsById.set(
+        recordId,
+        getNewUserCumulativeReward({
+          chainId: loadedChainId,
+          tokenId: candidate.stakedPosition.tokenId,
+          walletId: candidate.stakedPosition.wallet_id,
+          stakingPoolId: STAKING_POOL_ENTITY_ID,
+          uniPositionId: candidate.uniPosition.id,
+          blockNumber: block.number,
+        }),
+      );
     }
 
     // New cumulative totals. Records with a zero total have nothing to claim and get no leaf.
     // Sorted by tokenId so the same state always produces the same root.
     const updatedRecords = [...recordsById.values()]
       .map((record) => {
-        const earner = earnersByRecordId.get(record.id);
+        const earner = earners.get(record.id);
         return {
           ...record,
-          cumulativeReward: record.cumulativeReward + (dailyShares.get(record.id) ?? 0n),
+          cumulativeReward: record.cumulativeReward + (earner?.share ?? 0n),
           // Earners follow their current staking position; carried-forward records keep theirs.
-          wallet_id: earner?.stakedPosition.wallet_id ?? record.wallet_id,
-          uniPosition_id: earner?.uniPosition.id ?? record.uniPosition_id,
+          wallet_id: earner?.candidate.stakedPosition.wallet_id ?? record.wallet_id,
+          uniPosition_id: earner?.candidate.uniPosition.id ?? record.uniPosition_id,
         };
       })
       .filter((record) => record.cumulativeReward > 0n)
-      .sort((a, b) => (a.tokenId < b.tokenId ? -1 : a.tokenId > b.tokenId ? 1 : 0));
+      .sort((a, b) => compareBigInt(a.tokenId, b.tokenId));
 
     // Each leaf in the Merkle tree is the hash of (tokenId, cumulativeReward).
-    const { root: merkleRoot, tree } = buildMerkleTree(updatedRecords);
+    const { root: merkleRoot, proofs } = buildMerkleTree(updatedRecords);
 
     // Rewrite every record in the tree with the new root and a fresh proof, marked pending
     // (updatedAtTimestamp = 0) until the `Reward` event publishes this root.
-    // Leaves are in `updatedRecords` order, so each proof is looked up by index: looking it up
-    // by leaf hash scans every leaf per record, which is quadratic (~20s at 50k records).
+    // `proofs[i]` belongs to `updatedRecords[i]`.
     for (const [index, record] of updatedRecords.entries()) {
       context.UserCumulativeReward.set({
         ...record,
         updatedAtTimestamp: 0,
         merkleRoot,
-        proof: tree.getHexProof(tree.getLeaf(index), index),
+        proof: proofs[index]!,
         isRewardsDistributed: false,
         distributionSkipped: false,
         blockNumber: block.number,
@@ -588,6 +544,7 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "Reward" }, async ({ even
   // cumulative reward (from a daily calculation) has not yet been distributed on-chain.
   const pendingRewards = await context.UserCumulativeReward.getWhere({
     updatedAtTimestamp: { _eq: 0 },
+    stakingPool_id: { _eq: stakingPool.id },
   });
   if (pendingRewards.length === 0) return;
 
@@ -613,188 +570,10 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "Reward" }, async ({ even
   }
 });
 
-indexer.onEvent({ contract: "UniswapV4Staking", event: "RewardsClaimed" }, async ({ event, context }) => {
-  /**
-   * RewardsClaimed Event Handler
-   * -----------------------------
-   * Triggered when a user claims rewards from the staking contract
-   *
-   * This handler:
-   * 1. Updates the staking pool's total claimed rewards.
-   * 2. Creates a position record entry for the claim, used for historical tracking and aggregation.
-   */
+indexer.onEvent({ contract: "UniswapV4Staking", event: "RewardsClaimed" }, ({ event, context }) =>
+  recordRewardPayout(event, context, "claimed"),
+);
 
-  const {
-    chainId,
-    block: { timestamp, number: blockNumber },
-    params: { tokenId, amount },
-    srcAddress: stakingContractAddress,
-    transaction: { hash },
-    logIndex,
-  } = event;
-
-  const { id: hourId, start: hourStart } = getHour(timestamp);
-  const { start: dayStart } = getDay(timestamp);
-
-  const tokenEntityId = `${chainId}-${tokenId}`;
-  const stakingEntityId = `${chainId}-${stakingContractAddress}`;
-
-  const uniswapV4PositionToken =
-    await context.UniswapV4PositionToken.get(tokenEntityId);
-  if (!uniswapV4PositionToken) return;
-
-  const stakingPool = await context.StakingPoolV4.get(stakingEntityId);
-  if (!stakingPool) return;
-
-  // Rewards are tracked per tokenId, like the contract does. The reward owner is resolved
-  // from staking state rather than `transaction.from`, which may be a relayer or bundler.
-  const { walletId: walletEntityId, stakingPositionId: stakingPositionEntityId } =
-    await resolveRewardOwner(context, chainId, stakingPool.id, uniswapV4PositionToken);
-  const cumilativeRewardsDataEntityId = getRewardRecordId(chainId, tokenId);
-  const cumilativeRewardsData = await context.UserCumulativeReward.get(
-    cumilativeRewardsDataEntityId,
-  );
-
-  context.StakingPoolV4.set({
-    ...stakingPool,
-    totalRewardsClaimed: stakingPool.totalRewardsClaimed + amount,
-  });
-
-  context.StakingPoolV4PositionRecord.set({
-    id: `${stakingPool.id}-${uniswapV4PositionToken.tokenId}-${hourId}-${logIndex}`,
-    chainId,
-    dayStartTimestamp: dayStart,
-    blockTimestamp: timestamp,
-    blockNumber,
-    pool_id: stakingPool.id,
-    rewardsClaimed: amount,
-    rewardsBurned: 0n,
-    transactionHash: hash,
-    tokenId: uniswapV4PositionToken.tokenId,
-    transactionType: StakingPoolV4PositionRecordType.REWARDS_CLAIMED,
-    stakingPosition_id: stakingPositionEntityId,
-    wallet_id: walletEntityId
-  });
-
-  if (cumilativeRewardsData) {
-    context.UserCumulativeReward.set({
-      ...cumilativeRewardsData,
-      claimed: cumilativeRewardsData.claimed + amount,
-      // The record follows the current owner, e.g. a buyer claiming before staking.
-      wallet_id: walletEntityId,
-    });
-  } else {
-    context.UserCumulativeReward.set({
-      id: cumilativeRewardsDataEntityId,
-      tokenId,
-      cumulativeReward: 0n,
-      lastDistributedCumulativeReward: 0n,
-      updatedAtTimestamp: 0,
-      merkleRoot: "",
-      lastDistributedMerkleRoot: "",
-      isRewardsDistributed: false,
-      distributionSkipped: false,
-      blockNumber: 0,
-      wallet_id: walletEntityId,
-      stakingPool_id: stakingPool.id,
-      uniPosition_id: uniswapV4PositionToken.position_id,
-      proof: [""],
-      lastDistributedProof: [],
-      claimed: amount,
-      burned: 0n,
-    });
-  }
-});
-
-indexer.onEvent({ contract: "UniswapV4Staking", event: "RewardsBurned" }, async ({ event, context }) => {
-  /**
-   * RewardsBurned Event Handler
-   * ----------------------------
-   * Triggered when rewards are burned (slashed) due to early withdrawal or other penalties
-   *
-   * This handler:
-   * 1. Updates the staking pool's total burned rewards.
-   * 2. Creates a position record entry for the burn, used for historical tracking and aggregation.
-   */
-
-  const {
-    chainId,
-    block: { timestamp, number: blockNumber },
-    params: { tokenId, amount },
-    srcAddress: stakingContractAddress,
-    transaction: { hash },
-    logIndex,
-  } = event;
-
-  const { id: hourId, start: hourStart } = getHour(timestamp);
-  const { start: dayStart } = getDay(timestamp);
-
-  const tokenEntityId = `${chainId}-${tokenId}`;
-  const stakingEntityId = `${chainId}-${stakingContractAddress}`;
-
-  const uniswapV4PositionToken =
-    await context.UniswapV4PositionToken.get(tokenEntityId);
-  if (!uniswapV4PositionToken) return;
-
-  const stakingPool = await context.StakingPoolV4.get(stakingEntityId);
-  if (!stakingPool) return;
-
-  // Rewards are tracked per tokenId, like the contract does. The reward owner is resolved
-  // from staking state rather than `transaction.from`, which may be a relayer or bundler.
-  const { walletId: walletEntityId, stakingPositionId: stakingPositionEntityId } =
-    await resolveRewardOwner(context, chainId, stakingPool.id, uniswapV4PositionToken);
-  const cumilativeRewardsDataEntityId = getRewardRecordId(chainId, tokenId);
-  const cumilativeRewardsData = await context.UserCumulativeReward.get(
-    cumilativeRewardsDataEntityId,
-  );
-
-  context.StakingPoolV4.set({
-    ...stakingPool,
-    totalRewardsBurned: stakingPool.totalRewardsBurned + amount,
-  });
-
-  context.StakingPoolV4PositionRecord.set({
-    id: `${stakingPool.id}-${uniswapV4PositionToken.tokenId}-${hourId}-${logIndex}`,
-    chainId,
-    dayStartTimestamp: dayStart,
-    blockTimestamp: timestamp,
-    blockNumber,
-    pool_id: stakingPool.id,
-    rewardsClaimed: 0n,
-    rewardsBurned: amount,
-    transactionHash: hash,
-    tokenId: uniswapV4PositionToken.tokenId,
-    transactionType: StakingPoolV4PositionRecordType.REWARDS_BURNED,
-    stakingPosition_id: stakingPositionEntityId,
-    wallet_id: walletEntityId
-  });
-
-  if (cumilativeRewardsData) {
-    context.UserCumulativeReward.set({
-      ...cumilativeRewardsData,
-      burned: cumilativeRewardsData.burned + amount,
-      // The record follows the current owner, e.g. a buyer claiming before staking.
-      wallet_id: walletEntityId,
-    });
-  } else {
-    context.UserCumulativeReward.set({
-      id: cumilativeRewardsDataEntityId,
-      tokenId,
-      cumulativeReward: 0n,
-      lastDistributedCumulativeReward: 0n,
-      updatedAtTimestamp: 0,
-      merkleRoot: "",
-      lastDistributedMerkleRoot: "",
-      isRewardsDistributed: false,
-      distributionSkipped: false,
-      blockNumber: 0,
-      wallet_id: walletEntityId,
-      stakingPool_id: stakingPool.id,
-      uniPosition_id: uniswapV4PositionToken.position_id,
-      proof: [""],
-      lastDistributedProof: [],
-      claimed: 0n,
-      burned: amount,
-    });
-  }
-});
+indexer.onEvent({ contract: "UniswapV4Staking", event: "RewardsBurned" }, ({ event, context }) =>
+  recordRewardPayout(event, context, "burned"),
+);

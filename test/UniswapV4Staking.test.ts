@@ -6,6 +6,7 @@ import { AbiCoder, concat, keccak256, ZeroAddress } from 'ethers';
 import { CHAIN_ID, addr } from './fixtures';
 import {
   buildMerkleTree,
+  compareBigInt,
   getPredictedDailyBlockCount,
   getUniswapV4StakingDeployementBlock,
   TOTAL_DAILY_REWARDS,
@@ -275,7 +276,7 @@ const rootOf = (totals: Record<string, bigint>) =>
   buildMerkleTree(
     Object.entries(totals)
       .map(([tokenId, cumulativeReward]) => ({ tokenId: BigInt(tokenId), cumulativeReward }))
-      .sort((a, b) => (a.tokenId < b.tokenId ? -1 : 1)),
+      .sort((a, b) => compareBigInt(a.tokenId, b.tokenId)),
   ).root;
 
 // Mirrors the contract: leaf = keccak256(abi.encode(tokenId, cumulative)), solady MerkleProofLib (sorted pairs).

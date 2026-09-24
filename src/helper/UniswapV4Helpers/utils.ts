@@ -20,7 +20,7 @@ const SEPOLIA_CHAIN_ID = 11155111;
  * Each leaf is the keccak256 hash of (tokenId, cumulativeReward).
  *
  * @param positions - Array of objects containing tokenId and cumulativeReward.
- * @returns An object containing the Merkle tree instance and its hex root.
+ * @returns The Merkle tree instance, its hex root, and `proofs[i]`, the hex proof for `positions[i]`.
  */
 export function buildMerkleTree(positions: Array<{ tokenId: bigint; cumulativeReward: bigint }>) {
   const leaves = positions.map(({ tokenId, cumulativeReward }) =>
@@ -32,8 +32,14 @@ export function buildMerkleTree(positions: Array<{ tokenId: bigint; cumulativeRe
     )
   );
   const tree = new MerkleTree(leaves, keccak256, { sortPairs: true });
-  return { tree, root: tree.getHexRoot() };
+  // Proofs are looked up by leaf index. Looking them up by leaf hash scans every leaf per proof,
+  // which is O(n²): about 20s for 50k records.
+  const proofs = leaves.map((_, i) => tree.getHexProof(tree.getLeaf(i), i));
+  return { tree, root: tree.getHexRoot(), proofs };
 }
+
+/** Comparator for sorting bigints ascending, e.g. `records.sort((a, b) => compareBigInt(a.tokenId, b.tokenId))`. */
+export const compareBigInt = (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0);
 
 /**
  * Returns the predicted number of blocks per day for a given chain.
