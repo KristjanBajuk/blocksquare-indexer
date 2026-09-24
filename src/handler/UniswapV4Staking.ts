@@ -42,6 +42,10 @@ const resolveRewardOwner = async (
     .sort((a, b) => b.updatedAtTimestamp - a.updatedAtTimestamp);
 
   const openPosition = stakingPositions.find((p) => !p.isPositionClosed);
+  // The history record links to the position that earned the rewards: the open one, or else the
+  // latest closed one. After a resale, a holder who hasn't staked yet (e.g. Dave claiming #44)
+  // has no position of their own, so the claim links to the seller's closed position while
+  // `walletId` names the holder.
   const stakingPosition = openPosition ?? stakingPositions[0];
 
   return {
@@ -676,6 +680,8 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "RewardsClaimed" }, async
     context.UserCumulativeReward.set({
       ...cumilativeRewardsData,
       claimed: cumilativeRewardsData.claimed + amount,
+      // The record follows the current owner, e.g. a buyer claiming before staking.
+      wallet_id: walletEntityId,
     });
   } else {
     context.UserCumulativeReward.set({
@@ -767,6 +773,8 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "RewardsBurned" }, async 
     context.UserCumulativeReward.set({
       ...cumilativeRewardsData,
       burned: cumilativeRewardsData.burned + amount,
+      // The record follows the current owner, e.g. a buyer claiming before staking.
+      wallet_id: walletEntityId,
     });
   } else {
     context.UserCumulativeReward.set({

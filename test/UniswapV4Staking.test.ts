@@ -515,4 +515,23 @@ describe('UniswapV4Staking daily reward trees', () => {
     t.expect(burn?.wallet_id).toBe(wallet(ALICE));
     t.expect(burn?.stakingPosition_id).toBe(`${CHAIN_ID}-${ALICE}-42`);
   });
+
+  it('a resold, unstaked NFT is claimed by its new holder', async (t) => {
+    await run(
+      dayBlock(1) + 13,
+      deposit(dayBlock(1) - 10, CAROL, 44n),
+      publishRoot(dayBlock(1) + 10, rootOf({ '44': FULL })),
+      stakingEvent('Withdraw', dayBlock(1) + 11, { owner: CAROL, tokenId: 44n, liquidity: 10n ** 18n }, CAROL),
+      nftTransfer(dayBlock(1) + 12, CAROL, DAVE, 44n),
+      claim(dayBlock(1) + 13, 44n, FULL),
+    );
+
+    const record = (await rewards()).get(44n)!;
+    t.expect(record.wallet_id).toBe(wallet(DAVE));
+    t.expect(record.claimed).toBe(FULL);
+    const history = (await indexer.StakingPoolV4PositionRecord.getAll()).find((r) => r.transactionType === 'REWARDS_CLAIMED');
+    t.expect(history?.wallet_id).toBe(wallet(DAVE));
+    // Dave never staked #44: the claim links to Carol's position, which earned the rewards.
+    t.expect(history?.stakingPosition_id).toBe(`${CHAIN_ID}-${CAROL}-44`);
+  });
 });
