@@ -9,11 +9,13 @@ import { getDay, getHour } from './date';
 import { StakingPoolV4PositionRecordType } from '../types/enums';
 
 /**
- * Cumulative rewards belong to the NFT, not to the wallet that staked it: the contract
- * verifies leaves of (tokenId, cumulativeReward) and tracks `totalClaimedRewards[tokenId]`.
- * Keying the record by tokenId keeps the total intact across withdrawals and resales.
+ * Cumulative rewards belong to one deposit of the NFT, not to the wallet that staked it: every
+ * deposit starts a new epoch, the contract verifies leaves of (tokenId, epoch, cumulativeReward)
+ * and tracks `totalClaimedRewards[tokenId][epoch]`. Keying the record by (tokenId, epoch) keeps
+ * each deposit's total and slash separate, and intact across withdrawals and resales.
  */
-export const getRewardRecordId = (chainId: number, tokenId: bigint) => `${chainId}-${tokenId}`;
+export const getRewardRecordId = (chainId: number, tokenId: bigint, epoch: bigint) =>
+  `${chainId}-${tokenId}-${epoch}`;
 
 /**
  * A reward record with nothing earned, claimed or burned yet. It gets no leaf until its
@@ -22,6 +24,7 @@ export const getRewardRecordId = (chainId: number, tokenId: bigint) => `${chainI
 export const getNewUserCumulativeReward = ({
   chainId,
   tokenId,
+  epoch,
   walletId,
   stakingPoolId,
   uniPositionId,
@@ -29,13 +32,16 @@ export const getNewUserCumulativeReward = ({
 }: {
   chainId: number;
   tokenId: bigint;
+  epoch: bigint;
   walletId: string;
   stakingPoolId: string;
   uniPositionId: string;
   blockNumber: number;
 }): UserCumulativeReward => ({
-  id: getRewardRecordId(chainId, tokenId),
+  id: getRewardRecordId(chainId, tokenId, epoch),
   tokenId,
+  epoch,
+  rewardSlash: 0n,
   cumulativeReward: 0n,
   claimed: 0n,
   burned: 0n,
@@ -54,7 +60,7 @@ export const getNewUserCumulativeReward = ({
 });
 
 /**
- * Resolves who a claim/burn for `tokenId` belongs to. The events only carry the tokenId,
+ * Resolves who a claim/burn for `tokenId` belongs to. The events only carry the tokenId and epoch,
  * and `transaction.from` can be a relayer or bundler, so it cannot be used.
  * - Staked: the staker of the open position.
  * - Unstaked: the current NFT holder; the history record links the latest closed position.
@@ -98,12 +104,13 @@ const PAYOUT_FIELDS = {
 
 /**
  * Shared body of the RewardsClaimed and RewardsBurned handlers. A claim pays rewards out and a
- * burn slashes them (early-withdrawal penalty); both reduce what is left to claim for the NFT.
+ * burn slashes them (early-withdrawal penalty); both reduce what is left to claim for that
+ * deposit's (tokenId, epoch) bucket.
  *
  * This:
  * 1. Adds the amount to the staking pool's claimed or burned total.
  * 2. Writes a history record for the claim or burn.
- * 3. Adds the amount to the NFT's reward record and moves it to the current reward owner.
+ * 3. Adds the amount to the (tokenId, epoch) reward record and moves it to the current reward owner.
  */
 export const recordRewardPayout = async (
   event:
@@ -115,7 +122,7 @@ export const recordRewardPayout = async (
   const {
     chainId,
     block: { timestamp, number: blockNumber },
-    params: { tokenId, amount },
+    params: { tokenId, epoch, amount },
     srcAddress: stakingContractAddress,
     transaction: { hash },
     logIndex,
@@ -131,7 +138,7 @@ export const recordRewardPayout = async (
   const stakingPool = await context.StakingPoolV4.get(`${chainId}-${stakingContractAddress}`);
   if (!stakingPool) return;
 
-  // Rewards are tracked per tokenId, like the contract does. The reward owner is resolved
+  // Rewards are tracked per (tokenId, epoch), like the contract does. The reward owner is resolved
   // from staking state rather than `transaction.from`, which may be a relayer or bundler.
   const { walletId, stakingPositionId } = await resolveRewardOwner(
     context,
@@ -139,7 +146,9 @@ export const recordRewardPayout = async (
     stakingPool.id,
     uniswapV4PositionToken,
   );
-  const rewardRecord = await context.UserCumulativeReward.get(getRewardRecordId(chainId, tokenId));
+  const rewardRecord = await context.UserCumulativeReward.get(
+    getRewardRecordId(chainId, tokenId, epoch),
+  );
 
   context.StakingPoolV4.set({
     ...stakingPool,
@@ -157,6 +166,7 @@ export const recordRewardPayout = async (
     rewardsBurned: kind === 'burned' ? amount : 0n,
     transactionHash: hash,
     tokenId: uniswapV4PositionToken.tokenId,
+    epoch,
     transactionType,
     stakingPosition_id: stakingPositionId,
     wallet_id: walletId,
@@ -167,6 +177,7 @@ export const recordRewardPayout = async (
     getNewUserCumulativeReward({
       chainId,
       tokenId,
+      epoch,
       walletId,
       stakingPoolId: stakingPool.id,
       uniPositionId: uniswapV4PositionToken.position_id,

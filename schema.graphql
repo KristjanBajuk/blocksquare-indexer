@@ -706,6 +706,8 @@ type StakingPoolV4Position {
   lockedUntil: BigInt!
   timeBoost: BigInt!
   tokenId: BigInt! @index
+  "Epoch of the latest deposit. The contract starts a new reward bucket (tokenId, epoch) on every deposit."
+  epoch: BigInt!
   liquidity: BigInt!
   isPositionClosed: Boolean!
   updatedAtTimestamp: Int!
@@ -723,7 +725,7 @@ type StakingPoolV4RewardTree {
   chainId: Int!
   merkleRoot: String! @index
   blockNumber: Int! @index
-  "Number of leaves: every NFT with a nonzero cumulative reward"
+  "Number of leaves: every (tokenId, epoch) reward bucket with a nonzero cumulative reward"
   leafCount: Int!
   "Sum of all leaves' cumulative rewards: the total the contract must be funded with once this root is live"
   totalCumulativeReward: BigInt!
@@ -762,6 +764,8 @@ type StakingPoolV4PositionRecord {
   id: ID!
   chainId: Int!
   tokenId: BigInt! @index
+  "Deposit epoch the transaction belongs to"
+  epoch: BigInt!
   transactionType: StakingPoolV4PositionRecordType!
   transactionHash: String!
   rewardsClaimed: BigInt!
@@ -776,8 +780,11 @@ type StakingPoolV4PositionRecord {
 }
 
 type UserCumulativeReward {
-  id: ID! # ${chainId}-${tokenId}. Rewards belong to the NFT, matching the contract's per-tokenId claim tracking.
+  id: ID! # ${chainId}-${tokenId}-${epoch}. One record per deposit of the NFT, matching the contract's per-(tokenId, epoch) claim tracking.
   tokenId: BigInt! @index
+  epoch: BigInt! @index
+  "Early-withdraw reward slash stored on-chain for this epoch (100000 scale, 17500 = 17.5%). 0 unless the epoch exited early."
+  rewardSlash: BigInt!
   cumulativeReward: BigInt!
   claimed: BigInt!
   burned: BigInt!

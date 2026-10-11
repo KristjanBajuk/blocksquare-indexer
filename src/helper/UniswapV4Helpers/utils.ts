@@ -16,18 +16,21 @@ export const BOOST_PRECISION = 100n;
 const SEPOLIA_CHAIN_ID = 11155111;
 
 /**
- * Builds a Merkle tree from an array of reward data (tokenId + cumulativeReward).
- * Each leaf is the keccak256 hash of (tokenId, cumulativeReward).
+ * Builds a Merkle tree from reward buckets, one per (tokenId, epoch).
+ * Each leaf is keccak256(abi.encode(uint256 tokenId, uint256 epoch, uint256 cumulativeReward)),
+ * where cumulativeReward is the running total earned by that one deposit of the NFT.
  *
- * @param positions - Array of objects containing tokenId and cumulativeReward.
- * @returns The Merkle tree instance, its hex root, and `proofs[i]`, the hex proof for `positions[i]`.
+ * @param records - Reward buckets, in leaf order.
+ * @returns The Merkle tree instance, its hex root, and `proofs[i]`, the hex proof for `records[i]`.
  */
-export function buildMerkleTree(positions: Array<{ tokenId: bigint; cumulativeReward: bigint }>) {
-  const leaves = positions.map(({ tokenId, cumulativeReward }) =>
+export function buildMerkleTree(
+  records: Array<{ tokenId: bigint; epoch: bigint; cumulativeReward: bigint }>,
+) {
+  const leaves = records.map(({ tokenId, epoch, cumulativeReward }) =>
     ethers.keccak256(
       ethers.AbiCoder.defaultAbiCoder().encode(
-        ["uint256", "uint256"],
-        [tokenId, cumulativeReward]
+        ["uint256", "uint256", "uint256"],
+        [tokenId, epoch, cumulativeReward]
       )
     )
   );
@@ -40,6 +43,12 @@ export function buildMerkleTree(positions: Array<{ tokenId: bigint; cumulativeRe
 
 /** Comparator for sorting bigints ascending, e.g. `records.sort((a, b) => compareBigInt(a.tokenId, b.tokenId))`. */
 export const compareBigInt = (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0);
+
+/** Leaf order of a reward tree: by tokenId, then epoch, so the same state always gives the same root. */
+export const compareRewardBuckets = (
+  a: { tokenId: bigint; epoch: bigint },
+  b: { tokenId: bigint; epoch: bigint },
+) => compareBigInt(a.tokenId, b.tokenId) || compareBigInt(a.epoch, b.epoch);
 
 /**
  * Returns the predicted number of blocks per day for a given chain.

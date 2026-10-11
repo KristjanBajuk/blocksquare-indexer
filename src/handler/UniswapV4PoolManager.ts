@@ -113,6 +113,11 @@ indexer.onEvent({ contract: "UniswapV4PoolManager", event: "ModifyLiquidity" }, 
     salt,
   } = event.params;
 
+  // A zero delta only collects fees (e.g. the first of the two decreases in a staking early
+  // withdraw). It changes no liquidity, and its record would share an id with, and could
+  // overwrite, a real change of the same position in the same block.
+  if (liquidityDelta === 0n) return;
+
   // We only process liquidity changes for pools that are already indexed.
   const poolEntityId = `${chainId}-${poolId}`;
   let pool = await context.UniswapV4Pool.get(poolEntityId);

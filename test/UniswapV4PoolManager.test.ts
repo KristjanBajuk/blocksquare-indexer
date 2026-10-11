@@ -192,6 +192,30 @@ describe('UniswapV4PoolManager', () => {
     t.expect(await indexer.UniswapV4PoolPositionRecord.getAll()).toHaveLength(2);
   });
 
+  it('ignores a zero-delta ModifyLiquidity (fee collection), e.g. the first step of a staking early withdraw', async (t) => {
+    const slashed = -(4n * 10n ** 17n);
+    await runEvents(
+      indexer,
+      initializeEvent(),
+      modifyLiquidityEvent(TX_A, { blockNumber: 101 }),
+      // Early withdraw: a 0-liquidity decrease (fees to the staker), then the slashed liquidity.
+      modifyLiquidityEvent(TX_B, { liquidityDelta: 0n, blockNumber: 102, logIndex: 1 }),
+      modifyLiquidityEvent(TX_B, { liquidityDelta: slashed, blockNumber: 102, logIndex: 2 }),
+      // A plain fee collection on its own.
+      modifyLiquidityEvent(TX_B, { liquidityDelta: 0n, blockNumber: 103 }),
+    );
+
+    const [position, ...others] = await indexer.UniswapV4PoolPosition.getAll();
+    t.expect(others).toHaveLength(0);
+    t.expect(position?.liquidityDelta).toBe(LIQUIDITY + slashed);
+
+    const records = await indexer.UniswapV4PoolPositionRecord.getAll();
+    t.expect(records.map((r) => [r.id, r.liquidityDelta]).sort()).toEqual([
+      [`${UNIQUE_KEY}-101`, LIQUIDITY],
+      [`${UNIQUE_KEY}-102`, slashed],
+    ]);
+  });
+
   it('Swap updates pool price state and recomputes position amounts', async (t) => {
     const newTick = 100n; // above the position range -> position is all currency1
     const newSqrtPrice = SQRT_PRICE_1_1 * 2n;
