@@ -1,6 +1,6 @@
 import { getNewWallet } from "../helper/Wallet";
 import { indexer } from "envio";
-import type { UserCumulativeReward } from "envio";
+import type { EvmEvent, EvmOnEventContext, UserCumulativeReward } from "envio";
 import { getDay, getHour } from "../helper/date";
 import { getLoadedConfig } from "../config";
 import {
@@ -17,7 +17,10 @@ import { StakingPoolV4PositionRecordType } from "../types/enums";
 import {
   getNewUserCumulativeReward,
   getRewardRecordId,
+  getStakingPoolId,
+  getStakingPositionId,
   recordRewardPayout,
+  writeStakingHistoryRecord,
 } from "../helper/UniswapV4Staking";
 
 const { uniswapV4StakingAddress, chainId: loadedChainId } = getLoadedConfig();
@@ -74,7 +77,7 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "LPStakingInit" }, async 
   const exitsingUniV4Pool = await context.UniswapV4Pool.get(uniV4PoolEntityId);
 
   if (exitsingUniV4Pool) {
-    const stakingPoolEntityId = `${chainId}-${contractAddress}`;
+    const stakingPoolEntityId = getStakingPoolId(chainId, contractAddress);
     const existingContract =
       await context.StakingPoolV4.get(stakingPoolEntityId);
 
@@ -121,155 +124,113 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "Deposit" }, async ({ eve
   const {
     chainId,
     srcAddress: stakingContractAddress,
-    transaction: { hash: transactionHash },
-    block: { timestamp, number: blockNumber },
-    logIndex,
+    block: { timestamp },
   } = event;
   const { owner, tokenId, epoch, liquidity, lockedUntil, timeBoost } = event.params;
 
   /**
    * Get or create wallet entity for the staking user.
    */
-  const wallet = await context.Wallet.getOrCreate(
-    getNewWallet(event.chainId, owner),
-  );
-
-  /**
-   * Find the associated Uniswap V4 NFT position token.
-   */
-  const uniTokenEntityId = `${chainId}-${tokenId}`;
-  const existingUniToken =
-    await context.UniswapV4PositionToken.get(uniTokenEntityId);
+  const wallet = await context.Wallet.getOrCreate(getNewWallet(chainId, owner));
 
   /**
    * Only process staking logic if NFT position token exists.
    * This guarantees staking state is always linked to a valid liquidity position.
    */
-  if (existingUniToken) {
-    const stakingPoolEntityId = `${chainId}-${stakingContractAddress}`;
-    const positionEntityId = `${chainId}-${owner}-${tokenId}`;
-    const existingStakingPosition =
-      await context.StakingPoolV4Position.get(positionEntityId);
+  const positionToken = await context.UniswapV4PositionToken.get(`${chainId}-${tokenId}`);
+  if (!positionToken) return;
 
-    if (existingStakingPosition) {
-      context.StakingPoolV4Position.set({
-        ...existingStakingPosition,
-        epoch,
-        lockedUntil,
-        positionToken_id: existingUniToken.id,
-        liquidity,
-        timeBoost,
-        isPositionClosed: false,
-        updatedAtTimestamp: timestamp,
-      });
-    } else {
-      context.StakingPoolV4Position.set({
-        id: positionEntityId,
-        chainId,
-        lockedUntil,
-        tokenId,
-        epoch,
-        liquidity,
-        timeBoost,
-        isPositionClosed: false,
-        updatedAtTimestamp: timestamp,
-        wallet_id: wallet.id,
-        pool_id: stakingPoolEntityId,
-        positionToken_id: existingUniToken.id,
-        uniPosition_id: existingUniToken.position_id,
-      });
-    }
+  const stakingPoolId = getStakingPoolId(chainId, stakingContractAddress);
+  const stakingPositionId = getStakingPositionId(chainId, owner, tokenId);
 
-    /**
-     * The NFT's reward records of earlier epochs now belong to the new staker: unclaimed
-     * rewards follow the NFT. No record is created for the new epoch here; the daily run
-     * creates it when this deposit first earns.
-     */
-    const rewardRecords = await context.UserCumulativeReward.getWhere({
-      tokenId: { _eq: tokenId },
-    });
-    for (const rewardRecord of rewardRecords) {
-      if (rewardRecord.stakingPool_id !== stakingPoolEntityId) continue;
-      context.UserCumulativeReward.set({ ...rewardRecord, wallet_id: wallet.id });
-    }
+  // Creates the position, or reopens it with the new terms when the same owner re-deposits.
+  context.StakingPoolV4Position.set({
+    id: stakingPositionId,
+    chainId,
+    tokenId,
+    epoch,
+    lockedUntil,
+    liquidity,
+    timeBoost,
+    isPositionClosed: false,
+    updatedAtTimestamp: timestamp,
+    wallet_id: wallet.id,
+    pool_id: stakingPoolId,
+    positionToken_id: positionToken.id,
+    uniPosition_id: positionToken.position_id,
+  });
 
-    const { start: dayStart } = getDay(event.block.timestamp);
-
-    context.StakingPoolV4PositionRecord.set({
-      id: `${stakingPoolEntityId}-${existingUniToken.tokenId}-${blockNumber}-${logIndex}`,
-      transactionHash,
-      chainId,
-      dayStartTimestamp: dayStart,
-      blockTimestamp: timestamp,
-      blockNumber,
-      tokenId,
-      epoch,
-      pool_id: stakingPoolEntityId,
-      rewardsClaimed: 0n,
-      rewardsBurned: 0n,
-      transactionType: StakingPoolV4PositionRecordType.DEPOSIT,
-      stakingPosition_id: positionEntityId,
-      wallet_id: wallet.id
-    });
+  /**
+   * The NFT's reward records of earlier epochs now belong to the new staker: unclaimed
+   * rewards follow the NFT. No record is created for the new epoch here; the daily run
+   * creates it when this deposit first earns.
+   */
+  const rewardRecords = await context.UserCumulativeReward.getWhere({
+    tokenId: { _eq: tokenId },
+    stakingPool_id: { _eq: stakingPoolId },
+  });
+  for (const rewardRecord of rewardRecords) {
+    context.UserCumulativeReward.set({ ...rewardRecord, wallet_id: wallet.id });
   }
+
+  writeStakingHistoryRecord(context, event, {
+    tokenId,
+    epoch,
+    transactionType: StakingPoolV4PositionRecordType.DEPOSIT,
+    pool_id: stakingPoolId,
+    stakingPosition_id: stakingPositionId,
+    wallet_id: wallet.id,
+  });
 });
 
-indexer.onEvent({ contract: "UniswapV4Staking", event: "Withdraw" }, async ({ event, context }) => {
-  /**
-   * Withdraw event is emitted when a user unstakes their liquidity position NFT.
-   *
-   * This event updates staking state by:
-   * - Closing staking position lifecycle
-   * - Historical activity tracking
-   */
-
+/**
+ * Shared body of the Withdraw and EarlyWithdraw handlers: closes the staking position and
+ * writes a history record. `epoch` defaults to the position's current epoch, since Withdraw
+ * carries none: a normal withdraw always ends the current epoch.
+ */
+const closeStakingPosition = async (
+  event:
+    | EvmEvent<"UniswapV4Staking", "Withdraw">
+    | EvmEvent<"UniswapV4Staking", "EarlyWithdraw">,
+  context: EvmOnEventContext,
+  transactionType:
+    | StakingPoolV4PositionRecordType.WITHDRAW
+    | StakingPoolV4PositionRecordType.EARLY_WITHDRAW,
+  epoch?: bigint,
+) => {
   const {
     chainId,
-    transaction: { hash: transactionHash },
-    srcAddress: stakingContractAddress,
-    block: { timestamp, number: blockNumber },
-    logIndex,
+    block: { timestamp },
+    params: { owner, tokenId },
   } = event;
-  const { owner, tokenId } = event.params;
 
-  const stakingPositionEntityId = `${chainId}-${owner}-${tokenId}`;
-  const stakingPosition = await context.StakingPoolV4Position.get(
-    stakingPositionEntityId,
-  );
+  const stakingPositionId = getStakingPositionId(chainId, owner, tokenId);
+  const stakingPosition = await context.StakingPoolV4Position.get(stakingPositionId);
+  if (!stakingPosition) return;
 
-  if (stakingPosition) {
-    /**
-     * Mark staking position as closed since liquidity is withdrawn.
-     */
-    context.StakingPoolV4Position.set({
-      ...stakingPosition,
-      isPositionClosed: true,
-      updatedAtTimestamp: timestamp,
-    });
+  context.StakingPoolV4Position.set({
+    ...stakingPosition,
+    isPositionClosed: true,
+    updatedAtTimestamp: timestamp,
+  });
 
-    const { start: dayStart } = getDay(event.block.timestamp);
+  writeStakingHistoryRecord(context, event, {
+    tokenId,
+    epoch: epoch ?? stakingPosition.epoch,
+    transactionType,
+    pool_id: stakingPosition.pool_id,
+    stakingPosition_id: stakingPositionId,
+    wallet_id: stakingPosition.wallet_id,
+  });
+};
 
-    const stakingContractId = `${chainId}-${stakingContractAddress}`;
-
-    context.StakingPoolV4PositionRecord.set({
-      id: `${stakingPosition.pool_id}-${tokenId}-${blockNumber}-${logIndex}`,
-      transactionHash,
-      chainId,
-      dayStartTimestamp: dayStart,
-      blockTimestamp: timestamp,
-      blockNumber,
-      tokenId,
-      // Withdraw carries no epoch: a normal withdraw always ends the position's current epoch.
-      epoch: stakingPosition.epoch,
-      rewardsClaimed: 0n,
-      rewardsBurned: 0n,
-      transactionType: StakingPoolV4PositionRecordType.WITHDRAW,
-      pool_id: stakingContractId,
-      stakingPosition_id: stakingPositionEntityId,
-      wallet_id: `${chainId}-${owner}`
-    });
-  }
-});
+/**
+ * Withdraw event is emitted when a user unstakes their liquidity position NFT
+ * after the lock period.
+ */
+indexer.onEvent({ contract: "UniswapV4Staking", event: "Withdraw" }, ({ event, context }) =>
+  closeStakingPosition(event, context, StakingPoolV4PositionRecordType.WITHDRAW),
+);
 
 indexer.onEvent({ contract: "UniswapV4Staking", event: "EarlyWithdraw" }, async ({ event, context }) => {
   /**
@@ -283,17 +244,8 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "EarlyWithdraw" }, async 
    *   applied to every later claim of the epoch
    * - Historical activity tracking
    */
-
-  const {
-    chainId,
-    transaction: { hash: transactionHash },
-    srcAddress: stakingContractAddress,
-    block: { timestamp, number: blockNumber },
-    logIndex,
-  } = event;
-  const { owner, tokenId, epoch, rewardSlash } = event.params;
-
-  const stakingPositionEntityId = `${chainId}-${owner}-${tokenId}`;
+  const { chainId } = event;
+  const { tokenId, epoch, rewardSlash } = event.params;
 
   // Store the epoch's reward slash so the UI can show it without an RPC call. A deposit that
   // exits before any daily run has no record yet, and nothing to slash.
@@ -304,41 +256,7 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "EarlyWithdraw" }, async 
     context.UserCumulativeReward.set({ ...rewardRecord, rewardSlash });
   }
 
-  const stakingPosition = await context.StakingPoolV4Position.get(
-    stakingPositionEntityId,
-  );
-
-  if (stakingPosition) {
-    /**
-     * Mark position as closed since liquidity is withdrawn early.
-     */
-    context.StakingPoolV4Position.set({
-      ...stakingPosition,
-      isPositionClosed: true,
-      updatedAtTimestamp: timestamp,
-    });
-
-    const { start: dayStart } = getDay(event.block.timestamp);
-
-    const stakingContractId = `${chainId}-${stakingContractAddress}`;
-
-    context.StakingPoolV4PositionRecord.set({
-      id: `${stakingPosition.pool_id}-${tokenId}-${blockNumber}-${logIndex}`,
-      transactionHash,
-      chainId,
-      dayStartTimestamp: dayStart,
-      blockTimestamp: timestamp,
-      blockNumber,
-      tokenId,
-      epoch,
-      rewardsClaimed: 0n,
-      rewardsBurned: 0n,
-      transactionType: StakingPoolV4PositionRecordType.EARLY_WITHDRAW,
-      pool_id: stakingContractId,
-      stakingPosition_id: stakingPositionEntityId,
-      wallet_id: `${chainId}-${owner}`
-    });
-  }
+  await closeStakingPosition(event, context, StakingPoolV4PositionRecordType.EARLY_WITHDRAW, epoch);
 });
 
 indexer.onBlock(
@@ -374,7 +292,7 @@ indexer.onBlock(
 
     if (context.isPreload) return;
 
-    const STAKING_POOL_ENTITY_ID = `${loadedChainId}-${uniswapV4StakingAddress}`;
+    const STAKING_POOL_ENTITY_ID = getStakingPoolId(loadedChainId, uniswapV4StakingAddress);
 
     // Fetch staking pool and associated Uniswap pool. If either doesn't exist, we cannot calculate rewards.
     const stakingPool = await context.StakingPoolV4.get(STAKING_POOL_ENTITY_ID);
@@ -549,7 +467,7 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "Reward" }, async ({ even
     transaction: { hash },
   } = event;
 
-  const stakingEntityId = `${chainId}-${stakingContractAddress}`;
+  const stakingEntityId = getStakingPoolId(chainId, stakingContractAddress);
 
   const stakingPool = await context.StakingPoolV4.get(stakingEntityId);
   if (!stakingPool) return;

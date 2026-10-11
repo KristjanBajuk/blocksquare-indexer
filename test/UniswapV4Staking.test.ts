@@ -720,10 +720,12 @@ describe('UniswapV4Staking daily reward trees', () => {
       logIndex,
       block: { number: BASE_BLOCK + blockOffset, timestamp: HOUR_START + blockOffset },
     }) as ChainSimulate[number];
+  // History ids end in `-${blockNumber}-${logIndex}`.
+  const logIndexOf = (id: string) => Number(id.slice(id.lastIndexOf('-') + 1));
   const historyOf = async (tokenId: bigint) =>
     (await indexer.StakingPoolV4PositionRecord.getAll())
       .filter((r) => r.tokenId === tokenId)
-      .sort((a, b) => a.blockNumber - b.blockNumber || a.id.localeCompare(b.id));
+      .sort((a, b) => a.blockNumber - b.blockNumber || logIndexOf(a.id) - logIndexOf(b.id));
 
   it('keeps two history records for events in the same hour at the same log index', async (t) => {
     await run(

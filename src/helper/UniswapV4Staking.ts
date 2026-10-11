@@ -1,12 +1,60 @@
 import type {
   EvmEvent,
   EvmOnEventContext,
+  StakingPoolV4PositionRecord,
   UniswapV4PositionToken,
   UserCumulativeReward,
 } from 'envio';
 
 import { getDay } from './date';
 import { StakingPoolV4PositionRecordType } from '../types/enums';
+
+export const getStakingPoolId = (chainId: number, contractAddress: string) =>
+  `${chainId}-${contractAddress}`;
+
+/** One staking position per (owner, NFT): a re-deposit by the same owner reopens it. */
+export const getStakingPositionId = (chainId: number, owner: string, tokenId: bigint) =>
+  `${chainId}-${owner}-${tokenId}`;
+
+type StakingEventMeta = {
+  chainId: number;
+  logIndex: number;
+  block: { number: number; timestamp: number };
+  transaction: { hash: string };
+};
+
+/**
+ * Writes one entry of a token's staking history (deposit, withdrawal, claim or burn).
+ * Keyed by (blockNumber, logIndex), which is unique per chain: an hour bucket is not, because
+ * logIndex only counts logs within one block.
+ */
+export const writeStakingHistoryRecord = (
+  context: EvmOnEventContext,
+  event: StakingEventMeta,
+  record: Pick<
+    StakingPoolV4PositionRecord,
+    'tokenId' | 'epoch' | 'transactionType' | 'pool_id' | 'stakingPosition_id' | 'wallet_id'
+  > &
+    Partial<Pick<StakingPoolV4PositionRecord, 'rewardsClaimed' | 'rewardsBurned'>>,
+) => {
+  const {
+    chainId,
+    logIndex,
+    block: { number: blockNumber, timestamp },
+    transaction: { hash },
+  } = event;
+  context.StakingPoolV4PositionRecord.set({
+    id: `${record.pool_id}-${record.tokenId}-${blockNumber}-${logIndex}`,
+    chainId,
+    transactionHash: hash,
+    blockNumber,
+    blockTimestamp: timestamp,
+    dayStartTimestamp: getDay(timestamp).start,
+    rewardsClaimed: 0n,
+    rewardsBurned: 0n,
+    ...record,
+  });
+};
 
 /**
  * Cumulative rewards belong to one deposit of the NFT, not to the wallet that staked it: every
@@ -71,11 +119,12 @@ export const resolveRewardOwner = async (
   stakingPoolId: string,
   positionToken: UniswapV4PositionToken,
 ) => {
-  const stakingPositions = (
-    await context.StakingPoolV4Position.getWhere({ tokenId: { _eq: positionToken.tokenId } })
-  )
-    .filter((p) => p.pool_id === stakingPoolId)
-    .sort((a, b) => b.updatedAtTimestamp - a.updatedAtTimestamp);
+  const stakingPositions = [
+    ...(await context.StakingPoolV4Position.getWhere({
+      tokenId: { _eq: positionToken.tokenId },
+      pool_id: { _eq: stakingPoolId },
+    })),
+  ].sort((a, b) => b.updatedAtTimestamp - a.updatedAtTimestamp);
 
   const openPosition = stakingPositions.find((p) => !p.isPositionClosed);
   // The history record links to the position that earned the rewards: the open one, or else the
@@ -87,7 +136,8 @@ export const resolveRewardOwner = async (
   return {
     walletId: openPosition?.wallet_id ?? positionToken.wallet_id,
     stakingPositionId:
-      stakingPosition?.id ?? `${chainId}-${positionToken.owner}-${positionToken.tokenId}`,
+      stakingPosition?.id ??
+      getStakingPositionId(chainId, positionToken.owner, positionToken.tokenId),
   };
 };
 
@@ -121,20 +171,17 @@ export const recordRewardPayout = async (
 ) => {
   const {
     chainId,
-    block: { timestamp, number: blockNumber },
     params: { tokenId, epoch, amount },
     srcAddress: stakingContractAddress,
-    transaction: { hash },
-    logIndex,
   } = event;
   const { poolTotal, transactionType } = PAYOUT_FIELDS[kind];
-
-  const { start: dayStart } = getDay(timestamp);
 
   const uniswapV4PositionToken = await context.UniswapV4PositionToken.get(`${chainId}-${tokenId}`);
   if (!uniswapV4PositionToken) return;
 
-  const stakingPool = await context.StakingPoolV4.get(`${chainId}-${stakingContractAddress}`);
+  const stakingPool = await context.StakingPoolV4.get(
+    getStakingPoolId(chainId, stakingContractAddress),
+  );
   if (!stakingPool) return;
 
   // Rewards are tracked per (tokenId, epoch), like the contract does. The reward owner is resolved
@@ -154,21 +201,15 @@ export const recordRewardPayout = async (
     [poolTotal]: stakingPool[poolTotal] + amount,
   });
 
-  context.StakingPoolV4PositionRecord.set({
-    id: `${stakingPool.id}-${uniswapV4PositionToken.tokenId}-${blockNumber}-${logIndex}`,
-    chainId,
-    dayStartTimestamp: dayStart,
-    blockTimestamp: timestamp,
-    blockNumber,
-    pool_id: stakingPool.id,
-    rewardsClaimed: kind === 'claimed' ? amount : 0n,
-    rewardsBurned: kind === 'burned' ? amount : 0n,
-    transactionHash: hash,
-    tokenId: uniswapV4PositionToken.tokenId,
+  writeStakingHistoryRecord(context, event, {
+    tokenId,
     epoch,
     transactionType,
+    pool_id: stakingPool.id,
     stakingPosition_id: stakingPositionId,
     wallet_id: walletId,
+    rewardsClaimed: kind === 'claimed' ? amount : 0n,
+    rewardsBurned: kind === 'burned' ? amount : 0n,
   });
 
   const record =
