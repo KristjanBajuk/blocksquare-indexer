@@ -5,7 +5,7 @@ import type {
   UserCumulativeReward,
 } from 'envio';
 
-import { getDay, getHour } from './date';
+import { getDay } from './date';
 import { StakingPoolV4PositionRecordType } from '../types/enums';
 
 /**
@@ -129,7 +129,6 @@ export const recordRewardPayout = async (
   } = event;
   const { poolTotal, transactionType } = PAYOUT_FIELDS[kind];
 
-  const { id: hourId } = getHour(timestamp);
   const { start: dayStart } = getDay(timestamp);
 
   const uniswapV4PositionToken = await context.UniswapV4PositionToken.get(`${chainId}-${tokenId}`);
@@ -156,7 +155,7 @@ export const recordRewardPayout = async (
   });
 
   context.StakingPoolV4PositionRecord.set({
-    id: `${stakingPool.id}-${uniswapV4PositionToken.tokenId}-${hourId}-${logIndex}`,
+    id: `${stakingPool.id}-${uniswapV4PositionToken.tokenId}-${blockNumber}-${logIndex}`,
     chainId,
     dayStartTimestamp: dayStart,
     blockTimestamp: timestamp,

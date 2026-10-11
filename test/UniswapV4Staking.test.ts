@@ -709,6 +709,75 @@ describe('UniswapV4Staking daily reward trees', () => {
     t.expect(history?.stakingPosition_id).toBe(`${CHAIN_ID}-${CAROL}-44`);
   });
 
+  // History records used to be keyed by (hour, logIndex), and logIndex only counts within one block,
+  // so two events of one token in the same hour at the same log index overwrote each other.
+  // These blocks all fall in one hour and before the first daily run.
+  const HOUR_START = 1_700_002_800; // a UTC hour boundary
+  const BASE_BLOCK = dayBlock(1) - 1_000;
+  const inSameHour = (event: ChainSimulate[number], blockOffset: number, logIndex: number) =>
+    ({
+      ...event,
+      logIndex,
+      block: { number: BASE_BLOCK + blockOffset, timestamp: HOUR_START + blockOffset },
+    }) as ChainSimulate[number];
+  const historyOf = async (tokenId: bigint) =>
+    (await indexer.StakingPoolV4PositionRecord.getAll())
+      .filter((r) => r.tokenId === tokenId)
+      .sort((a, b) => a.blockNumber - b.blockNumber || a.id.localeCompare(b.id));
+
+  it('keeps two history records for events in the same hour at the same log index', async (t) => {
+    await run(
+      BASE_BLOCK + 10,
+      inSameHour(deposit(0, ALICE, 42n, 1n), 0, 1),
+      inSameHour(deposit(0, ALICE, 42n, 2n), 10, 1),
+    );
+
+    const history = await historyOf(42n);
+    t.expect(history.map((r) => [r.transactionType, r.epoch, r.blockNumber])).toEqual([
+      ['DEPOSIT', 1n, BASE_BLOCK],
+      ['DEPOSIT', 2n, BASE_BLOCK + 10],
+    ]);
+    t.expect(history.map((r) => r.id)).toEqual([
+      `${STAKING_POOL_ENTITY_ID}-42-${BASE_BLOCK}-1`,
+      `${STAKING_POOL_ENTITY_ID}-42-${BASE_BLOCK + 10}-1`,
+    ]);
+  });
+
+  it('keeps the full history of a deposit, early withdraw, re-deposit and batch claim within one hour', async (t) => {
+    // The sequence from the Sepolia-fork run that lost two of seven records.
+    await run(
+      BASE_BLOCK + 542,
+      inSameHour(deposit(0, ALICE, 42n, 1n), 0, 1),
+      inSameHour(earlyWithdraw(0, ALICE, 42n, 1n), 311, 2),
+      inSameHour(deposit(0, ALICE, 42n, 2n), 313, 1),
+      // claimRewardsBatch over epochs 1 and 2: four events in one transaction.
+      inSameHour(burn(0, 42n, 1n, 1n), 542, 2),
+      inSameHour(claim(0, 42n, 1n, 2n), 542, 3),
+      inSameHour(burn(0, 42n, 2n, 3n), 542, 6),
+      inSameHour(claim(0, 42n, 2n, 4n), 542, 7),
+    );
+
+    const history = await historyOf(42n);
+    t.expect(history.map((r) => [r.transactionType, r.epoch, r.blockNumber - BASE_BLOCK])).toEqual([
+      ['DEPOSIT', 1n, 0],
+      ['EARLY_WITHDRAW', 1n, 311],
+      ['DEPOSIT', 2n, 313],
+      ['REWARDS_BURNED', 1n, 542],
+      ['REWARDS_CLAIMED', 1n, 542],
+      ['REWARDS_BURNED', 2n, 542],
+      ['REWARDS_CLAIMED', 2n, 542],
+    ]);
+    t.expect(history.map((r) => [r.rewardsBurned, r.rewardsClaimed])).toEqual([
+      [0n, 0n],
+      [0n, 0n],
+      [0n, 0n],
+      [1n, 0n],
+      [0n, 2n],
+      [3n, 0n],
+      [0n, 4n],
+    ]);
+  });
+
   it('builds the same root from the same buckets in any insertion order', async (t) => {
     const seeded = { '42:1': THIRD, '43:1': HALF, '44:1': FULL };
     const expected = rootOf({ ...seeded, '42:2': FULL });

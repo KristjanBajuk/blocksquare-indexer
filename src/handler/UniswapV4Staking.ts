@@ -193,11 +193,10 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "Deposit" }, async ({ eve
       context.UserCumulativeReward.set({ ...rewardRecord, wallet_id: wallet.id });
     }
 
-    const { id: hourId, start: hourStart } = getHour(event.block.timestamp);
     const { start: dayStart } = getDay(event.block.timestamp);
 
     context.StakingPoolV4PositionRecord.set({
-      id: `${stakingPoolEntityId}-${existingUniToken.tokenId}-${hourId}-${logIndex}`,
+      id: `${stakingPoolEntityId}-${existingUniToken.tokenId}-${blockNumber}-${logIndex}`,
       transactionHash,
       chainId,
       dayStartTimestamp: dayStart,
@@ -248,13 +247,12 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "Withdraw" }, async ({ ev
       updatedAtTimestamp: timestamp,
     });
 
-    const { id: hourId, start: hourStart } = getHour(event.block.timestamp);
     const { start: dayStart } = getDay(event.block.timestamp);
 
     const stakingContractId = `${chainId}-${stakingContractAddress}`;
 
     context.StakingPoolV4PositionRecord.set({
-      id: `${stakingPosition.pool_id}-${tokenId}-${hourId}-${logIndex}`,
+      id: `${stakingPosition.pool_id}-${tokenId}-${blockNumber}-${logIndex}`,
       transactionHash,
       chainId,
       dayStartTimestamp: dayStart,
@@ -320,13 +318,12 @@ indexer.onEvent({ contract: "UniswapV4Staking", event: "EarlyWithdraw" }, async 
       updatedAtTimestamp: timestamp,
     });
 
-    const { id: hourId, start: hourStart } = getHour(event.block.timestamp);
     const { start: dayStart } = getDay(event.block.timestamp);
 
     const stakingContractId = `${chainId}-${stakingContractAddress}`;
 
     context.StakingPoolV4PositionRecord.set({
-      id: `${stakingPosition.pool_id}-${tokenId}-${hourId}-${logIndex}`,
+      id: `${stakingPosition.pool_id}-${tokenId}-${blockNumber}-${logIndex}`,
       transactionHash,
       chainId,
       dayStartTimestamp: dayStart,
