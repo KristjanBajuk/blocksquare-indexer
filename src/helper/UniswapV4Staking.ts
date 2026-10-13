@@ -8,7 +8,9 @@ import type {
 } from 'envio';
 
 import { getDay } from './date';
+import { getLoadedConfig } from '../config';
 import { BOOST_PRECISION } from './UniswapV4Helpers/utils';
+import { calculateActiveLiquidity } from './UniswapV4Helpers/liquidityAmounts';
 import { StakingPoolV4PositionRecordType } from '../types/enums';
 
 const SECONDS_PER_DAY = 86400n;
@@ -96,6 +98,8 @@ export const getNewUserCumulativeReward = ({
   rewardSlash: 0n,
   pendingBoostReward: 0n,
   forfeitedBoostReward: 0n,
+  accruedWeight: 0n,
+  accruedBaseWeight: 0n,
   cumulativeReward: 0n,
   claimed: 0n,
   burned: 0n,
@@ -124,8 +128,91 @@ export const getLockBoost = (
 };
 
 /**
- * The part of a deposit's held boost bonus that an early exit keeps: the bonus an honest lock of
- * the days actually served would have earned. A 365-day lock left on day 180 keeps the bonus of
+ * Adds every open staked position's reward weight for the time since the last accrual, to the
+ * reward record of its current deposit: liquidity × seconds in range, boosted for the seconds
+ * before `lockedUntil`. The daily run then splits the day's pool by this weight, so what counts is
+ * how long a position was in range, not where the price sat at one predictable block. A swap into
+ * range and back within one block adds no time and earns nothing.
+ *
+ * Call it before anything that changes a weight: a swap (tick), a liquidity change in the pool, a
+ * deposit or withdrawal, and at the start of the daily run. The store still holds the tick and
+ * positions that applied over the elapsed time. Pass `uniswapV4PoolId` from pool events so other
+ * pools are ignored.
+ */
+export const accrueStakingWeights = async (
+  context: EvmOnEventContext,
+  {
+    chainId,
+    now,
+    blockNumber,
+    uniswapV4PoolId,
+  }: { chainId: number; now: number; blockNumber: number; uniswapV4PoolId?: string },
+) => {
+  const stakingPool = await context.StakingPoolV4.get(
+    getStakingPoolId(chainId, getLoadedConfig().uniswapV4StakingAddress),
+  );
+  if (!stakingPool) return;
+  if (uniswapV4PoolId !== undefined && uniswapV4PoolId !== stakingPool.uniswapV4Pool_id) return;
+
+  const from = stakingPool.lastAccrualTimestamp;
+  if (now <= from) return;
+  context.StakingPoolV4.set({ ...stakingPool, lastAccrualTimestamp: now });
+  // No start time yet (LPStakingInit sets one): this call only starts the clock.
+  if (from === 0) return;
+
+  const uniV4Pool = await context.UniswapV4Pool.get(stakingPool.uniswapV4Pool_id);
+  if (!uniV4Pool) return;
+
+  const openPositions = await context.StakingPoolV4Position.getWhere({
+    pool_id: { _eq: stakingPool.id },
+    isPositionClosed: { _eq: false },
+  });
+
+  const seconds = BigInt(now - from);
+  for (const position of openPositions) {
+    if (!position.uniPosition_id) continue;
+    const uniPosition = await context.UniswapV4PoolPosition.get(position.uniPosition_id);
+    if (!uniPosition) continue;
+
+    // The tick in the store is the one that held since `from`.
+    const liquidity = calculateActiveLiquidity(uniPosition, uniV4Pool.tick);
+    if (liquidity === 0n) continue;
+
+    // The boost pays for the promise not to leave, so it applies only to seconds before lockedUntil.
+    const lockedEnd = position.lockedUntil < BigInt(now) ? position.lockedUntil : BigInt(now);
+    const lockedSeconds = lockedEnd > BigInt(from) ? lockedEnd - BigInt(from) : 0n;
+    const baseWeight = liquidity * seconds;
+    const weight =
+      (liquidity * (lockedSeconds * position.timeBoost + (seconds - lockedSeconds) * BOOST_PRECISION)) /
+      BOOST_PRECISION;
+
+    const recordId = getRewardRecordId(chainId, position.tokenId, position.epoch);
+    const record =
+      (await context.UserCumulativeReward.get(recordId)) ??
+      getNewUserCumulativeReward({
+        chainId,
+        tokenId: position.tokenId,
+        epoch: position.epoch,
+        walletId: position.wallet_id,
+        stakingPoolId: stakingPool.id,
+        uniPositionId: uniPosition.id,
+        blockNumber,
+      });
+    context.UserCumulativeReward.set({
+      ...record,
+      accruedWeight: record.accruedWeight + weight,
+      accruedBaseWeight: record.accruedBaseWeight + baseWeight,
+      // The record follows its current staker.
+      wallet_id: position.wallet_id,
+      uniPosition_id: uniPosition.id,
+    });
+  }
+};
+
+/**
+ * The part of a deposit's boost bonus that an early exit keeps: the bonus an honest lock of the
+ * days actually served would have earned. Applies to the held bonus and to the bonus part of
+ * weight accrued since the last daily run alike. A 365-day lock left on day 180 keeps the bonus of
  * a 180-day lock, so declaring a longer lock than you serve never pays more than the honest one.
  */
 export const getReleasableBoostReward = ({

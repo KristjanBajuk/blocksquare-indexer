@@ -3,6 +3,7 @@ import { indexer } from "envio";
 import { getLoadedConfig } from "../config";
 import { getAmount0, getAmount1 } from "../helper/UniswapV4Helpers/liquidityAmounts";
 import { getDay } from "../helper/date";
+import { accrueStakingWeights } from "../helper/UniswapV4Staking";
 
 const bstTokenAddress = getLoadedConfig().blockSquareTokenAddress;
 
@@ -55,12 +56,18 @@ indexer.onEvent({ contract: "UniswapV4PoolManager", event: "Initialize" }, async
 });
 
 indexer.onEvent({ contract: "UniswapV4PoolManager", event: "Swap" }, async ({ event, context }) => {
-  const { chainId } = event;
+  const {
+    chainId,
+    block: { timestamp, number: blockNumber },
+  } = event;
   const { id: poolId, tick, sqrtPriceX96 } = event.params;
 
   const existingPool = await context.UniswapV4Pool.get(`${chainId}-${poolId}`);
 
   if (existingPool) {
+    // Staking rewards accrue per second in range: credit the time at the old tick before it moves.
+    await accrueStakingWeights(context, { chainId, now: timestamp, blockNumber, uniswapV4PoolId: existingPool.id });
+
     context.UniswapV4Pool.set({
       ...existingPool,
       tick,
@@ -122,6 +129,10 @@ indexer.onEvent({ contract: "UniswapV4PoolManager", event: "ModifyLiquidity" }, 
   const poolEntityId = `${chainId}-${poolId}`;
   let pool = await context.UniswapV4Pool.get(poolEntityId);
   if (!pool) return;
+
+  // Staking rewards accrue per second in range: credit the time at the old liquidity before it
+  // changes (an early withdraw removes part of a staked position).
+  await accrueStakingWeights(context, { chainId, now: timestamp, blockNumber, uniswapV4PoolId: poolEntityId });
 
   // Check if position already exists with the same transaction hash
   const positionId = `${chainId}-${transactionHash}`;

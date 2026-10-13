@@ -692,6 +692,8 @@ type StakingPoolV4 {
   totalRewardsAdded: BigInt!
   totalRewardsClaimed: BigInt!
   totalRewardsBurned: BigInt!
+  "When staked positions' reward weights were last accrued (seconds). Weight accrues per second in range, not per daily snapshot."
+  lastAccrualTimestamp: Int!
   uniswapV4Pool: UniswapV4Pool!
   positions: [StakingPoolV4Position!]! @derivedFrom(field: "pool")
   positionRecords: [StakingPoolV4PositionRecord!]! @derivedFrom(field: "pool")
@@ -793,6 +795,10 @@ type UserCumulativeReward {
   pendingBoostReward: BigInt!
   "Boost bonus dropped on an early exit because the lock was not served. Never enters a leaf and is never funded."
   forfeitedBoostReward: BigInt!
+  "Liquidity × seconds in range × boost since the last daily run: this deposit's claim on the next day's pool. Reset by the daily run."
+  accruedWeight: BigInt! @index
+  "The same liquidity × seconds at 1x, without the boost. accruedWeight − accruedBaseWeight is the boost part."
+  accruedBaseWeight: BigInt!
   cumulativeReward: BigInt!
   claimed: BigInt!
   burned: BigInt!

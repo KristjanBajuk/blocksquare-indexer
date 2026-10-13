@@ -317,8 +317,10 @@ const verifyProof = (
   return node === root;
 };
 
-// Block timestamps in these tests: one second per block, so events and the RPC stub agree.
-const timestampOf = (blockNumber: number) => 1_700_000_000 + blockNumber;
+// Block timestamps in these tests: 12 seconds per block, like mainnet, so events and the RPC stub
+// agree and locks can last real days.
+const SECONDS_PER_BLOCK = 12;
+const timestampOf = (blockNumber: number) => 1_700_000_000 + blockNumber * SECONDS_PER_BLOCK;
 
 // The daily run reads its block timestamp over RPC (getBlockTimestamp). Answer it from timestampOf.
 const stubBlockTimestampRpc = () => {
@@ -355,9 +357,13 @@ const deposit = (
   owner: `0x${string}`,
   tokenId: bigint,
   epoch: bigint,
-  { lockedUntil = 1_800_000_000n, timeBoost = 100n }: { lockedUntil?: bigint; timeBoost?: bigint } = {},
+  {
+    lockedUntil = 2_000_000_000n,
+    timeBoost = 100n,
+    logIndex,
+  }: { lockedUntil?: bigint; timeBoost?: bigint; logIndex?: number } = {},
 ) =>
-  stakingEvent('Deposit', blockNumber, { owner, tokenId, epoch, liquidity: 10n ** 18n, lockedUntil, timeBoost }, owner);
+  stakingEvent('Deposit', blockNumber, { owner, tokenId, epoch, liquidity: 10n ** 18n, lockedUntil, timeBoost }, owner, logIndex);
 const earlyWithdraw = (blockNumber: number, owner: `0x${string}`, tokenId: bigint, epoch: bigint) =>
   stakingEvent(
     'EarlyWithdraw',
@@ -443,6 +449,7 @@ describe('UniswapV4Staking daily reward trees', () => {
       totalRewardsAdded: 0n,
       totalRewardsClaimed: 0n,
       totalRewardsBurned: 0n,
+      lastAccrualTimestamp: 0,
       createdAtTimestamp: 1_699_999_000,
       creationTransaction: `0x${'bb'.repeat(32)}`,
       uniswapV4Pool_id: UNI_POOL_ENTITY_ID,
@@ -487,28 +494,67 @@ describe('UniswapV4Staking daily reward trees', () => {
     vi.unstubAllEnvs();
   });
 
+  // Expected split of a day's pool, mirroring the daily run: a bucket's weight is liquidity ×
+  // seconds in range, boosted for its seconds before lockedUntil. Every test position has 1e18 L.
+  const inRange = (blocks: number, { lockedBlocks = blocks, boost = 100n } = {}) => ({
+    weight:
+      (10n ** 18n *
+        (BigInt(lockedBlocks * SECONDS_PER_BLOCK) * boost + BigInt((blocks - lockedBlocks) * SECONDS_PER_BLOCK) * 100n)) /
+      100n,
+    base: 10n ** 18n * BigInt(blocks * SECONDS_PER_BLOCK),
+  });
+  const split = (buckets: Record<string, { weight: bigint; base: bigint }>) => {
+    const total = Object.values(buckets).reduce((sum, b) => sum + b.weight, 0n);
+    return Object.fromEntries(
+      Object.entries(buckets).map(([key, b]) => {
+        const share = (FULL * b.weight) / total;
+        return [key, { share, base: (share * b.base) / b.weight }];
+      }),
+    ) as Record<string, { share: bigint; base: bigint }>;
+  };
+  // Shares at 1x, by blocks in range during the day.
+  const shares = (blocksInRange: Record<string, number>) =>
+    Object.fromEntries(
+      Object.entries(split(Object.fromEntries(Object.entries(blocksInRange).map(([k, b]) => [k, inRange(b)])))).map(
+        ([k, v]) => [k, v.share],
+      ),
+    ) as Record<string, bigint>;
+  const addDay = (totals: Record<string, bigint>, day: Record<string, bigint>) => {
+    const out = { ...totals };
+    for (const [key, share] of Object.entries(day)) out[key] = (out[key] ?? 0n) + share;
+    return out;
+  };
+  const sum = (totals: Record<string, bigint>) => Object.values(totals).reduce((a, b) => a + b, 0n);
+  const D = DAY_BLOCKS;
+
   it('keeps every reward bucket claimable across out-of-range days, withdrawals and resales', async (t) => {
-    const day1 = { '42:1': THIRD, '43:1': THIRD, '44:1': THIRD };
-    const day2 = { '42:1': THIRD + HALF, '43:1': THIRD, '44:1': THIRD + HALF };
-    const day3 = { '42:1': THIRD + HALF, '43:1': THIRD + FULL, '44:1': THIRD + HALF };
-    // Dave's deposit of #44 is epoch 2: Carol's unclaimed epoch 1 is carried, new shares go to epoch 2.
-    const day4 = { '42:1': THIRD + HALF, '43:1': THIRD + FULL + HALF, '44:1': THIRD + HALF, '44:2': HALF };
+    const s1 = shares({ '42:1': 30, '43:1': 30, '44:1': 30 });
+    // Day 2: #43 leaves the range 20 blocks in and earns only for those 20 blocks.
+    const s2 = shares({ '42:1': D, '43:1': 20, '44:1': D });
+    // Day 3: #42 exits 20 blocks in, #44 21 blocks in; #43 is back in range from block 23.
+    const s3 = shares({ '42:1': 20, '43:1': D - 23, '44:1': 21 });
+    // Day 4: Dave's re-stake of #44 (epoch 2) earns from block 20; Carol's epoch 1 is carried.
+    const s4 = shares({ '43:1': D, '44:2': D - 20 });
+    const day1 = s1;
+    const day2 = addDay(day1, s2);
+    const day3 = addDay(day2, s3);
+    const day4 = addDay(day3, s4);
     const [r1, r2, r3, r4] = [day1, day2, day3, day4].map(rootOf);
 
     const changes = await run(
       dayBlock(4) + 20,
-      // Step 1: all three staked (epoch 1) and in range for day 1.
-      deposit(dayBlock(1) - 30, ALICE, 42n, 1n),
-      deposit(dayBlock(1) - 20, BOB, 43n, 1n),
-      deposit(dayBlock(1) - 10, CAROL, 44n, 1n),
+      // Step 1: all three staked (epoch 1) together and in range for day 1.
+      deposit(dayBlock(1) - 30, ALICE, 42n, 1n, { logIndex: 1 }),
+      deposit(dayBlock(1) - 30, BOB, 43n, 1n, { logIndex: 2 }),
+      deposit(dayBlock(1) - 30, CAROL, 44n, 1n, { logIndex: 3 }),
       // Step 2: publish R1; Carol claims #44 through a relayer.
       publishRoot(dayBlock(1) + 10, r1!),
-      claim(dayBlock(1) + 11, 44n, 1n, THIRD),
-      // Step 3: #43 goes out of range before day 2.
+      claim(dayBlock(1) + 11, 44n, 1n, s1['44:1']!),
+      // Step 3: #43 goes out of range.
       swapToTick(dayBlock(1) + 20, OUT_OF_NARROW_RANGE_TICK),
-      // Step 4: publish R2; Bob claims his carried-forward #43.
+      // Step 4: publish R2; Bob claims his day 1 rewards.
       publishRoot(dayBlock(2) + 10, r2!),
-      claim(dayBlock(2) + 11, 43n, 1n, THIRD),
+      claim(dayBlock(2) + 11, 43n, 1n, s1['43:1']!),
       // Step 5: Alice early-withdraws #42 unclaimed; Carol withdraws #44 and sells it to Dave; #43 back in range.
       earlyWithdraw(dayBlock(2) + 20, ALICE, 42n, 1n),
       stakingEvent('Withdraw', dayBlock(2) + 21, { owner: CAROL, tokenId: 44n, liquidity: 10n ** 18n }, CAROL),
@@ -516,31 +562,31 @@ describe('UniswapV4Staking daily reward trees', () => {
       swapToTick(dayBlock(2) + 23, 0n),
       // Step 6: publish R3; Alice claims #42 after withdrawing.
       publishRoot(dayBlock(3) + 10, r3!),
-      claim(dayBlock(3) + 11, 42n, 1n, THIRD + HALF),
+      claim(dayBlock(3) + 11, 42n, 1n, day3['42:1']!),
       // Step 7: Dave stakes #44, starting epoch 2.
       deposit(dayBlock(3) + 20, DAVE, 44n, 2n),
       // Step 8: publish R4.
       publishRoot(dayBlock(4) + 10, r4!),
       // Step 9: Dave claims both #44 buckets in one claimRewardsBatch tx.
-      claim(dayBlock(4) + 20, 44n, 1n, HALF, 1),
-      claim(dayBlock(4) + 20, 44n, 2n, HALF, 2),
+      claim(dayBlock(4) + 20, 44n, 1n, day4['44:1']! - s1['44:1']!, 1),
+      claim(dayBlock(4) + 20, 44n, 2n, day4['44:2']!, 2),
     );
 
     expectTree(t, changes, 1, day1);
-    expectTree(t, changes, 2, day2); // #43 carried while out of range
-    expectTree(t, changes, 3, day3); // withdrawn #42 and resold #44 carried
+    expectTree(t, changes, 2, day2); // #43 earned only while in range
+    expectTree(t, changes, 3, day3); // withdrawn #42 and resold #44 earned until they left
     expectTree(t, changes, 4, day4); // Dave's epoch 2 earns; Carol's epoch 1 carried
 
-    // Step 4: Bob's carried-forward leaf was distributed under R2 with a valid proof.
+    // Step 4: Bob's leaf was distributed under R2 with a valid proof.
     const bobAtR2 = rewardSetsAt(changes, dayBlock(2) + 10).find((r) => bucketKey(r) === '43:1')!;
     t.expect(bobAtR2.isRewardsDistributed).toBe(true);
     t.expect(bobAtR2.lastDistributedMerkleRoot).toBe(r2);
-    t.expect(verifyProof(bobAtR2.lastDistributedProof, r2!, 43n, 1n, THIRD)).toBe(true);
+    t.expect(verifyProof(bobAtR2.lastDistributedProof, r2!, 43n, 1n, day2['43:1']!)).toBe(true);
 
     // Step 6: Alice's withdrawn #42 was distributed under R3 with its full total.
     const aliceAtR3 = rewardSetsAt(changes, dayBlock(3) + 10).find((r) => bucketKey(r) === '42:1')!;
-    t.expect(aliceAtR3.lastDistributedCumulativeReward).toBe(THIRD + HALF);
-    t.expect(verifyProof(aliceAtR3.lastDistributedProof, r3!, 42n, 1n, THIRD + HALF)).toBe(true);
+    t.expect(aliceAtR3.lastDistributedCumulativeReward).toBe(day3['42:1']);
+    t.expect(verifyProof(aliceAtR3.lastDistributedProof, r3!, 42n, 1n, day3['42:1']!)).toBe(true);
 
     // Claims land on the (tokenId, epoch) record and name the staker or holder, not the relayer.
     const claims = (await indexer.StakingPoolV4PositionRecord.getAll())
@@ -562,10 +608,10 @@ describe('UniswapV4Staking daily reward trees', () => {
     const pending = (key: string) => final.get(key)!.lastDistributedCumulativeReward - final.get(key)!.claimed;
     t.expect(final.get('44:1')!.wallet_id).toBe(wallet(DAVE));
     t.expect(final.get('44:2')!.wallet_id).toBe(wallet(DAVE));
-    t.expect(final.get('44:1')!.claimed).toBe(THIRD + HALF); // Carol's claim + Dave's batch claim
+    t.expect(final.get('44:1')!.claimed).toBe(day4['44:1']); // Carol's claim + Dave's batch claim
     t.expect(pending('44:1')).toBe(0n);
     t.expect(pending('44:2')).toBe(0n);
-    t.expect(pending('43:1')).toBe(FULL + HALF);
+    t.expect(pending('43:1')).toBe(day4['43:1']! - s1['43:1']!);
     t.expect(pending('42:1')).toBe(0n);
     // Only the early-exited epoch stores a reward slash.
     t.expect(Object.fromEntries([...final].map(([key, r]) => [key, r.rewardSlash]))).toEqual({
@@ -576,23 +622,53 @@ describe('UniswapV4Staking daily reward trees', () => {
     });
 
     // Conservation: four daily pools, minus at most one wei of dust per earner per run.
-    const total = [...final.values()].reduce((sum, r) => sum + r.cumulativeReward, 0n);
+    const total = [...final.values()].reduce((acc, r) => acc + r.cumulativeReward, 0n);
     t.expect(total <= 4n * FULL).toBe(true);
-    t.expect(4n * FULL - total <= 3n + 2n + 2n + 2n).toBe(true);
+    t.expect(4n * FULL - total <= 3n + 3n + 3n + 2n).toBe(true);
 
     // One reward tree per daily run, each marked published by its Reward event.
-    const sum = (totals: Record<string, bigint>) => Object.values(totals).reduce((a, b) => a + b, 0n);
     const trees = (await indexer.StakingPoolV4RewardTree.getAll()).sort((a, b) => a.blockNumber - b.blockNumber);
     t.expect(trees.map((tree) => tree.merkleRoot)).toEqual([r1, r2, r3, r4]);
     t.expect(trees.map((tree) => tree.blockNumber)).toEqual([1, 2, 3, 4].map(dayBlock));
     // leafCount counts buckets, not NFTs: #44 has two on day 4.
     t.expect(trees.map((tree) => tree.leafCount)).toEqual([3, 3, 3, 4]);
     t.expect(trees.map((tree) => tree.totalCumulativeReward)).toEqual([day1, day2, day3, day4].map(sum));
-    t.expect(trees.map((tree) => tree.dailyReward)).toEqual([3n * THIRD, 2n * HALF, FULL, 2n * HALF]);
+    t.expect(trees.map((tree) => tree.dailyReward)).toEqual([s1, s2, s3, s4].map(sum));
     t.expect(trees.every((tree) => tree.isPublished && tree.publishedAmount === FULL)).toBe(true);
     t.expect(trees.map((tree) => tree.publishedTransactionHash)).toEqual(
       [1, 2, 3, 4].map((day) => `0x${(dayBlock(day) + 10).toString(16).padStart(64, '0')}`),
     );
+  });
+
+  it('a swap into range around the daily run earns almost nothing', async (t) => {
+    // Bob's narrow range is out of range all of day 2 except one block on each side of the run's
+    // previous and current block: the price is moved into his range right before the run.
+    const s2 = shares({ '42:1': D, '43:1': 2 });
+    const changes = await run(
+      dayBlock(2),
+      deposit(dayBlock(1) - 10, ALICE, 42n, 1n, { logIndex: 1 }),
+      deposit(dayBlock(1) - 10, BOB, 43n, 1n, { logIndex: 2 }),
+      swapToTick(dayBlock(1) + 1, OUT_OF_NARROW_RANGE_TICK),
+      swapToTick(dayBlock(2) - 1, 0n),
+    );
+
+    expectTree(t, changes, 2, { '42:1': HALF + s2['42:1']!, '43:1': HALF + s2['43:1']! });
+    // A one-block snapshot would have given Bob half of the day. Two blocks in range earn him
+    // two blocks' worth.
+    t.expect(s2['43:1']! < FULL / 1000n).toBe(true);
+  });
+
+  it('a position in range for half the day earns half as much as one in range all day', async (t) => {
+    const changes = await run(
+      dayBlock(2),
+      deposit(dayBlock(1) - 10, ALICE, 42n, 1n, { logIndex: 1 }),
+      deposit(dayBlock(1) - 10, BOB, 43n, 1n, { logIndex: 2 }),
+      swapToTick(dayBlock(1) + D / 2, OUT_OF_NARROW_RANGE_TICK),
+    );
+
+    const day2 = new Map(rewardSetsAt(changes, dayBlock(2)).map((r) => [bucketKey(r), r.cumulativeReward - HALF]));
+    t.expect(Object.fromEntries(day2)).toEqual(shares({ '42:1': D, '43:1': D / 2 }));
+    t.expect(day2.get('42:1')! - 2n * day2.get('43:1')! <= 1n).toBe(true);
   });
 
   // Early exit, then re-stake: the old penalty must not touch the new deposit.
@@ -601,12 +677,17 @@ describe('UniswapV4Staking daily reward trees', () => {
     earlyWithdraw(dayBlock(1) + 10, ALICE, 42n, 1n),
     deposit(dayBlock(1) + 20, ALICE, 42n, 2n),
   ];
+  // Epoch 1 earns alone on day 1 and for 10 more blocks on day 2; epoch 2 from block 20.
+  const restakeDay2 = () => {
+    const s2 = shares({ '42:1': 10, '42:2': D - 20 });
+    return { '42:1': FULL + s2['42:1']!, '42:2': s2['42:2']! };
+  };
 
   it('an early exit and re-stake keeps the old epoch as its own leaf next to the new one', async (t) => {
     const changes = await run(dayBlock(2), ...earlyExitAndRestake());
 
     expectTree(t, changes, 1, { '42:1': FULL });
-    expectTree(t, changes, 2, { '42:1': FULL, '42:2': FULL });
+    expectTree(t, changes, 2, restakeDay2());
 
     const final = await rewards();
     t.expect(final.get('42:1')!.rewardSlash).toBe(REWARD_SLASH);
@@ -627,7 +708,7 @@ describe('UniswapV4Staking daily reward trees', () => {
     ]);
   });
 
-  it('a deposit that exits before any daily run gets no reward record', async (t) => {
+  it('a deposit that exits before the daily run still earns for its time in range', async (t) => {
     const changes = await run(
       dayBlock(1),
       deposit(dayBlock(1) - 30, ALICE, 42n, 1n),
@@ -635,16 +716,15 @@ describe('UniswapV4Staking daily reward trees', () => {
       deposit(dayBlock(1) - 10, ALICE, 42n, 2n),
     );
 
-    expectTree(t, changes, 1, { '42:2': FULL });
-    t.expect([...(await rewards()).keys()]).toEqual(['42:2']);
+    // Epoch 1 was in range 10 blocks before it left, epoch 2 the last 10 blocks.
+    expectTree(t, changes, 1, shares({ '42:1': 10, '42:2': 10 }));
   });
 
   it('claims and burns update only the epoch they name', async (t) => {
-    const root = rootOf({ '42:1': FULL, '42:2': FULL });
     await run(
       dayBlock(2) + 11,
       ...earlyExitAndRestake(),
-      publishRoot(dayBlock(2) + 10, root),
+      publishRoot(dayBlock(2) + 10, rootOf(restakeDay2())),
       // claimRewards(42, 1): the stored 17.5% slash burns part of the epoch-1 bucket.
       claim(dayBlock(2) + 11, 42n, 1n, 80n, 1),
       burn(dayBlock(2) + 11, 42n, 1n, 20n, 2),
@@ -659,11 +739,10 @@ describe('UniswapV4Staking daily reward trees', () => {
   });
 
   it('a batch claim updates every epoch it names', async (t) => {
-    const root = rootOf({ '42:1': FULL, '42:2': FULL });
     await run(
       dayBlock(2) + 11,
       ...earlyExitAndRestake(),
-      publishRoot(dayBlock(2) + 10, root),
+      publishRoot(dayBlock(2) + 10, rootOf(restakeDay2())),
       // claimRewardsBatch(42, [1, 2], ...): one tx, one event per bucket.
       claim(dayBlock(2) + 11, 42n, 1n, 70n, 1),
       burn(dayBlock(2) + 11, 42n, 1n, 15n, 2),
@@ -680,38 +759,47 @@ describe('UniswapV4Staking daily reward trees', () => {
   });
 
   it('applies the time boost only while locked, holding the bonus back until the lock ends', async (t) => {
-    // Both lock at 2x. Alice stays locked; Carol's lock ends exactly at the day 2 run, when the
-    // contract already lets her leave without a slash, so she earns 1x from then on.
+    // Both lock at 2x. Alice stays locked; Carol's lock ends halfway through day 2, after which
+    // the contract lets her leave without a slash, so she earns 1x for the rest of the day.
     const BOOST = 200n;
-    const base = (share: bigint) => (share * 100n) / BOOST;
-    const aliceDay2 = (FULL * 2n) / 3n; // 2x against 1x
-    const carolDay2 = FULL / 3n;
+    const s1 = split({ '42:1': inRange(20, { boost: BOOST }), '44:1': inRange(20, { boost: BOOST }) });
+    const s2 = split({
+      '42:1': inRange(D, { boost: BOOST }),
+      '44:1': inRange(D, { lockedBlocks: D / 2, boost: BOOST }),
+    });
+    const bonus = (s: { share: bigint; base: bigint }) => s.share - s.base;
     const changes = await run(
       dayBlock(2),
-      deposit(dayBlock(1) - 20, ALICE, 42n, 1n, { timeBoost: BOOST, lockedUntil: 1_900_000_000n }),
-      deposit(dayBlock(1) - 10, CAROL, 44n, 1n, { timeBoost: BOOST, lockedUntil: BigInt(timestampOf(dayBlock(2))) }),
+      deposit(dayBlock(1) - 20, ALICE, 42n, 1n, { timeBoost: BOOST, lockedUntil: 1_900_000_000n, logIndex: 1 }),
+      deposit(dayBlock(1) - 20, CAROL, 44n, 1n, {
+        timeBoost: BOOST,
+        lockedUntil: BigInt(timestampOf(dayBlock(1) + D / 2)),
+        logIndex: 2,
+      }),
     );
 
     // Day 1: both locked at 2x and split the pool, but only the 1x base goes into the leaves.
-    expectTree(t, changes, 1, { '42:1': base(HALF), '44:1': base(HALF) });
+    t.expect(s1['42:1']!.share).toBe(HALF);
+    expectTree(t, changes, 1, { '42:1': s1['42:1']!.base, '44:1': s1['44:1']!.base });
     const day1 = new Map(rewardSetsAt(changes, dayBlock(1)).map((r) => [bucketKey(r), r]));
-    t.expect(day1.get('42:1')!.pendingBoostReward).toBe(HALF - base(HALF));
-    t.expect(day1.get('44:1')!.pendingBoostReward).toBe(HALF - base(HALF));
+    t.expect(day1.get('42:1')!.pendingBoostReward).toBe(bonus(s1['42:1']!));
+    t.expect(day1.get('44:1')!.pendingBoostReward).toBe(bonus(s1['44:1']!));
 
-    // Day 2: Alice is still locked and keeps holding bonus. Carol's lock is over: she earns 1x and
-    // her held bonus is released into her leaf.
+    // Day 2: Alice is still locked and keeps holding bonus. Carol earned 2x until her lock ended,
+    // then 1x; her lock is over at the run, so all her held bonus is released into her leaf.
+    t.expect(s2['44:1']!.share < s2['42:1']!.share).toBe(true);
     expectTree(t, changes, 2, {
-      '42:1': base(HALF) + base(aliceDay2),
-      '44:1': base(HALF) + carolDay2 + (HALF - base(HALF)),
+      '42:1': s1['42:1']!.base + s2['42:1']!.base,
+      '44:1': s1['44:1']!.share + s2['44:1']!.share,
     });
     const final = await rewards();
-    t.expect(final.get('42:1')!.pendingBoostReward).toBe(HALF - base(HALF) + aliceDay2 - base(aliceDay2));
+    t.expect(final.get('42:1')!.pendingBoostReward).toBe(bonus(s1['42:1']!) + bonus(s2['42:1']!));
     t.expect(final.get('44:1')!.pendingBoostReward).toBe(0n);
 
     const [day1Tree, day2Tree] = (await indexer.StakingPoolV4RewardTree.getAll()).sort((a, b) => a.blockNumber - b.blockNumber);
-    t.expect(day1Tree?.dailyReward).toBe(HALF + HALF);
-    t.expect(day1Tree?.totalPendingBoostReward).toBe(2n * (HALF - base(HALF)));
-    t.expect(day2Tree?.dailyReward).toBe(aliceDay2 + carolDay2);
+    t.expect(day1Tree?.dailyReward).toBe(s1['42:1']!.share + s1['44:1']!.share);
+    t.expect(day1Tree?.totalPendingBoostReward).toBe(bonus(s1['42:1']!) + bonus(s1['44:1']!));
+    t.expect(day2Tree?.dailyReward).toBe(s2['42:1']!.share + s2['44:1']!.share);
     t.expect(day2Tree?.totalPendingBoostReward).toBe(final.get('42:1')!.pendingBoostReward);
     // The operator funds only what is in the leaves.
     t.expect(day2Tree?.totalCumulativeReward).toBe(
@@ -720,39 +808,44 @@ describe('UniswapV4Staking daily reward trees', () => {
   });
 
   it('an early exit keeps only the boost bonus the days served earned', async (t) => {
-    // Pool params from the fixture: lock 7–365 days, boost 1x–2x. Alice declares 365 days (2x)
-    // and leaves after 180, which an honest lock rewards with getBoost(180) = 148 (1.48x).
-    const DAY = 86_400;
-    const stakedAt = timestampOf(dayBlock(1) - 10);
-    const pending = FULL - (FULL * 100n) / 200n;
-    const kept = (pending * (148n - 100n)) / (200n - 100n);
-    const exit = {
-      ...earlyWithdraw(dayBlock(1) + 10, ALICE, 42n, 1n),
-      block: { number: dayBlock(1) + 10, timestamp: stakedAt + 180 * DAY },
-    } as ChainSimulate[number];
-
+    // A short-lock pool so the test can serve real days: lock 1–3 days, boost 1x–3x.
+    const pool = await indexer.StakingPoolV4.getOrThrow(STAKING_POOL_ENTITY_ID);
+    indexer.StakingPoolV4.set({ ...pool, minDays: 1n, maxDays: 3n, minBoost: 100n, maxBoost: 300n });
+    const DAY = 86_400 / SECONDS_PER_BLOCK;
+    const depositBlock = dayBlock(1) - 10;
+    // Alice declares 3 days (3x) and leaves after 2. An honest 2-day lock earns getBoost(2) = 2x,
+    // so she keeps half of her bonus: (200 − 100) / (300 − 100).
+    const exitBlock = depositBlock + 2 * DAY;
     const changes = await run(
-      dayBlock(2),
-      deposit(dayBlock(1) - 10, ALICE, 42n, 1n, { timeBoost: 200n, lockedUntil: BigInt(stakedAt + 365 * DAY) }),
-      exit,
-      // Bob keeps the pool in range on day 2, so a tree is built and Alice's kept bonus released.
-      deposit(dayBlock(1) + 20, BOB, 43n, 1n),
+      dayBlock(4),
+      deposit(depositBlock, ALICE, 42n, 1n, { timeBoost: 300n, lockedUntil: BigInt(timestampOf(depositBlock + 3 * DAY)) }),
+      earlyWithdraw(exitBlock, ALICE, 42n, 1n),
     );
 
-    expectTree(t, changes, 1, { '42:1': FULL / 2n });
-    const atExit = rewardSetsAt(changes, dayBlock(1) + 10).find((r) => bucketKey(r) === '42:1')!;
-    t.expect(atExit.cumulativeReward).toBe(FULL / 2n); // unchanged until the next tree
-    t.expect(atExit.pendingBoostReward).toBe(kept);
-    t.expect(atExit.forfeitedBoostReward).toBe(pending - kept);
-    t.expect(atExit.rewardSlash).toBe(REWARD_SLASH);
+    // Days 1–3: Alice earns the whole pool at 3x; a third goes into the leaf, the rest is held.
+    expectTree(t, changes, 1, { '42:1': THIRD });
+    expectTree(t, changes, 3, { '42:1': 3n * THIRD });
+    const held = 3n * (FULL - THIRD);
+    const kept = held / 2n;
 
-    expectTree(t, changes, 2, { '42:1': FULL / 2n + kept, '43:1': FULL });
+    const atExit = rewardSetsAt(changes, exitBlock).find((r) => bucketKey(r) === '42:1')!;
+    t.expect(atExit.cumulativeReward).toBe(3n * THIRD); // unchanged until the next tree
+    t.expect(atExit.pendingBoostReward).toBe(kept);
+    t.expect(atExit.forfeitedBoostReward).toBe(held - kept);
+    t.expect(atExit.rewardSlash).toBe(REWARD_SLASH);
+    // The part of day 4 before the exit is prorated too: 3x cut to 2x.
+    t.expect(atExit.accruedWeight).toBe(2n * atExit.accruedBaseWeight);
+
+    // Day 4: Alice earns the whole pool for her last blocks at 2x, and everything she kept is
+    // released because she is no longer staked.
+    expectTree(t, changes, 4, { '42:1': 3n * THIRD + FULL + kept });
     const alice = (await rewards()).get('42:1')!;
     t.expect(alice.pendingBoostReward).toBe(0n);
-    t.expect(alice.forfeitedBoostReward).toBe(pending - kept);
-    const [, day2Tree] = (await indexer.StakingPoolV4RewardTree.getAll()).sort((a, b) => a.blockNumber - b.blockNumber);
+    t.expect(alice.forfeitedBoostReward).toBe(held - kept);
+    const day4Tree = (await indexer.StakingPoolV4RewardTree.getAll()).find((tree) => tree.blockNumber === dayBlock(4));
     // The forfeited bonus is in no leaf, so the operator never funds it.
-    t.expect(day2Tree?.totalCumulativeReward).toBe(FULL / 2n + kept + FULL);
+    t.expect(day4Tree?.totalCumulativeReward).toBe(3n * THIRD + FULL + kept);
+    t.expect(day4Tree?.totalPendingBoostReward).toBe(0n);
   });
 
   it('fails the daily run instead of guessing when the block timestamp cannot be read', async (t) => {
@@ -762,20 +855,23 @@ describe('UniswapV4Staking daily reward trees', () => {
     t.expect(await indexer.StakingPoolV4RewardTree.getAll()).toHaveLength(0);
   });
 
-  it('does not produce a new root when no staked position is in range', async (t) => {
+  it('does not produce a new root when no staked position was in range since the last run', async (t) => {
+    // Bob is alone and leaves the range 20 blocks into day 2, so day 3 has no earner.
     const r1 = rootOf({ '43:1': FULL });
+    const r2 = rootOf({ '43:1': 2n * FULL });
     const changes = await run(
-      dayBlock(2),
+      dayBlock(3),
       deposit(dayBlock(1) - 10, BOB, 43n, 1n),
       publishRoot(dayBlock(1) + 10, r1),
       swapToTick(dayBlock(1) + 20, OUT_OF_NARROW_RANGE_TICK),
+      publishRoot(dayBlock(2) + 10, r2),
     );
 
-    t.expect(rewardSetsAt(changes, dayBlock(2))).toHaveLength(0);
-    t.expect((await indexer.StakingPoolV4RewardTree.getAll()).map((tree) => tree.merkleRoot)).toEqual([r1]);
+    t.expect(rewardSetsAt(changes, dayBlock(3))).toHaveLength(0);
+    t.expect((await indexer.StakingPoolV4RewardTree.getAll()).map((tree) => tree.merkleRoot).sort()).toEqual([r1, r2].sort());
     const record = (await rewards()).get('43:1')!;
-    t.expect(record.cumulativeReward).toBe(FULL);
-    t.expect(record.merkleRoot).toBe(r1);
+    t.expect(record.cumulativeReward).toBe(2n * FULL);
+    t.expect(record.merkleRoot).toBe(r2);
     t.expect(record.isRewardsDistributed).toBe(true);
   });
 
