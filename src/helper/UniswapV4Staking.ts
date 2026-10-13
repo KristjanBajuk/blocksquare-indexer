@@ -10,7 +10,7 @@ import type {
 import { getDay } from './date';
 import { getLoadedConfig } from '../config';
 import { BOOST_PRECISION } from './UniswapV4Helpers/utils';
-import { calculateActiveLiquidity } from './UniswapV4Helpers/liquidityAmounts';
+import { getActivePositionValue } from './UniswapV4Helpers/liquidityAmounts';
 import { StakingPoolV4PositionRecordType } from '../types/enums';
 
 const SECONDS_PER_DAY = 86400n;
@@ -129,8 +129,9 @@ export const getLockBoost = (
 
 /**
  * Adds every open staked position's reward weight for the time since the last accrual, to the
- * reward record of its current deposit: liquidity × seconds in range, boosted for the seconds
- * before `lockedUntil`. The daily run then splits the day's pool by this weight, so what counts is
+ * reward record of its current deposit: capital value × seconds in range, boosted for the seconds
+ * before `lockedUntil`. Value is the position's worth in ETH at the pool price, so a narrow range
+ * earns the same per unit of capital as a wide one, and only while in range. The daily run then splits the day's pool by this weight, so what counts is
  * how long a position was in range, not where the price sat at one predictable block. A swap into
  * range and back within one block adds no time and earns nothing.
  *
@@ -174,16 +175,16 @@ export const accrueStakingWeights = async (
     const uniPosition = await context.UniswapV4PoolPosition.get(position.uniPosition_id);
     if (!uniPosition) continue;
 
-    // The tick in the store is the one that held since `from`.
-    const liquidity = calculateActiveLiquidity(uniPosition, uniV4Pool.tick);
-    if (liquidity === 0n) continue;
+    // The tick and price in the store are the ones that held since `from`.
+    const value = getActivePositionValue(uniPosition, uniV4Pool.tick, uniV4Pool.sqrtPriceX96);
+    if (value === 0n) continue;
 
     // The boost pays for the promise not to leave, so it applies only to seconds before lockedUntil.
     const lockedEnd = position.lockedUntil < BigInt(now) ? position.lockedUntil : BigInt(now);
     const lockedSeconds = lockedEnd > BigInt(from) ? lockedEnd - BigInt(from) : 0n;
-    const baseWeight = liquidity * seconds;
+    const baseWeight = value * seconds;
     const weight =
-      (liquidity * (lockedSeconds * position.timeBoost + (seconds - lockedSeconds) * BOOST_PRECISION)) /
+      (value * (lockedSeconds * position.timeBoost + (seconds - lockedSeconds) * BOOST_PRECISION)) /
       BOOST_PRECISION;
 
     const recordId = getRewardRecordId(chainId, position.tokenId, position.epoch);

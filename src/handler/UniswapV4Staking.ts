@@ -325,7 +325,7 @@ indexer.onBlock(
      * reward Merkle tree for the Uniswap V4 staking pool.
      *
      * Today's reward pool is split by the weight each deposit accrued since the last run:
-     * liquidity × seconds in range, boosted while locked (see accrueStakingWeights). Weight
+     * capital value in ETH × seconds in range, boosted while locked (see accrueStakingWeights). Weight
      * accrues on every swap, liquidity change, deposit and withdrawal, so a deposit earns for
      * the time it was actually in range, including one that closed during the day. Each share
      * goes to that deposit's record (one per (tokenId, epoch)). Only the 1x base of a share
@@ -352,8 +352,18 @@ indexer.onBlock(
       stakingPool_id: { _eq: STAKING_POOL_ENTITY_ID },
       accruedWeight: { _gt: 0n },
     });
-    // Nothing staked and nothing earned since the last run.
-    if (activeStakedPositions.length === 0 && accruedRecordsSoFar.length === 0) return;
+    const recordsHoldingBonus = await context.UserCumulativeReward.getWhere({
+      stakingPool_id: { _eq: STAKING_POOL_ENTITY_ID },
+      pendingBoostReward: { _gt: 0n },
+    });
+    // Nothing staked, nothing earned since the last run and no held bonus to release.
+    if (
+      activeStakedPositions.length === 0 &&
+      accruedRecordsSoFar.length === 0 &&
+      recordsHoldingBonus.length === 0
+    ) {
+      return;
+    }
 
     // Block handlers only receive the block number, so the run's timestamp is read from the chain.
     const now = await context.effect(getBlockTimestamp, {
@@ -369,10 +379,6 @@ indexer.onBlock(
       accruedWeight: { _gt: 0n },
     });
     const totalWeight = earningRecords.reduce((sum, record) => sum + record.accruedWeight, 0n);
-
-    // No staked position was in range since the last run: no rewards to distribute. Don't publish
-    // a new root: the previous one stays valid on-chain.
-    if (totalWeight === 0n) return;
 
     // Today's earners, keyed by reward record ID, with their share of the daily pool. `base` is
     // the part the share would be at 1x; the rest (share − base) is the boost bonus.
@@ -404,10 +410,12 @@ indexer.onBlock(
     // and a deposit that is no longer locked gets all of its pending bonus moved into the leaf.
     // Earners' accrued weight is used up. Totals only change here, together with the tree, so a
     // record's proof always matches it.
+    let totalReleased = 0n;
     const mergedRecords = existingRecords.map((record) => {
       const earner = earners.get(record.id);
       const pending = record.pendingBoostReward + (earner ? earner.share - earner.base : 0n);
       const released = lockedRecordIds.has(record.id) ? 0n : pending;
+      totalReleased += released;
       return {
         ...record,
         cumulativeReward: record.cumulativeReward + (earner?.base ?? 0n) + released,
@@ -416,6 +424,12 @@ indexer.onBlock(
         accruedBaseWeight: earner ? 0n : record.accruedBaseWeight,
       };
     });
+
+    // No staked position was in range since the last run and no held bonus became claimable:
+    // nothing changes, so don't publish a new root. The previous one stays valid on-chain.
+    // A day with nobody in range still builds a tree when a lock ended or a staker left, or
+    // their held bonus would wait for someone else to earn.
+    if (earners.size === 0 && totalReleased === 0n) return;
 
     // Records with a zero total have nothing to claim and get no leaf.
     // Sorted by (tokenId, epoch) so the same state always produces the same root.

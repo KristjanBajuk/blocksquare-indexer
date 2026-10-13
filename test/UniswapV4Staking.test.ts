@@ -12,6 +12,7 @@ import {
   TOTAL_DAILY_REWARDS,
 } from '../src/helper/UniswapV4Helpers/utils';
 import { getNewUserCumulativeReward } from '../src/helper/UniswapV4Staking';
+import { getAmount0, getAmount1 } from '../src/helper/UniswapV4Helpers/liquidityAmounts';
 
 type ChainSimulate = NonNullable<
   NonNullable<TestIndexerProcessConfig['chains'][typeof CHAIN_ID]>['simulate']
@@ -272,6 +273,7 @@ const RELAYER = addr('0x5555555555555555555555555555555555555555');
 
 // #43 has a narrow range and leaves it when the pool tick moves to 120; the others stay in range.
 const WIDE_RANGE = { tickLower: -600n, tickUpper: 600n };
+const FULL_RANGE = { tickLower: -887220n, tickUpper: 887220n };
 const NARROW_RANGE = { tickLower: -60n, tickUpper: 60n };
 const OUT_OF_NARROW_RANGE_TICK = 120n;
 
@@ -394,7 +396,15 @@ const rewardSetsAt = (changes: Changes, block: number) =>
 describe('UniswapV4Staking daily reward trees', () => {
   let indexer: TestIndexer;
 
-  const setNft = (tokenId: bigint, owner: `0x${string}`, range: { tickLower: bigint; tickUpper: bigint }) => {
+  // Range and liquidity of each NFT, so the expected splits can value the positions.
+  let nfts: Record<string, { range: { tickLower: bigint; tickUpper: bigint }; liquidity: bigint }> = {};
+  const setNft = (
+    tokenId: bigint,
+    owner: `0x${string}`,
+    range: { tickLower: bigint; tickUpper: bigint },
+    liquidity = 10n ** 18n,
+  ) => {
+    nfts[tokenId.toString()] = { range, liquidity };
     indexer.UniswapV4PositionToken.set({
       id: `${CHAIN_ID}-${tokenId}`,
       tokenId,
@@ -409,7 +419,7 @@ describe('UniswapV4Staking daily reward trees', () => {
       uniqueKey: `uni-${tokenId}`,
       chainId: CHAIN_ID,
       ...range,
-      liquidityDelta: 10n ** 18n,
+      liquidityDelta: liquidity,
       salt: '',
       amount0: 0n,
       amount1: 0n,
@@ -420,6 +430,7 @@ describe('UniswapV4Staking daily reward trees', () => {
 
   const newIndexer = () => {
     indexer = createTestIndexer();
+    nfts = {};
     indexer.UniswapV4Pool.set({
       id: UNI_POOL_ENTITY_ID,
       chainId: CHAIN_ID,
@@ -494,15 +505,28 @@ describe('UniswapV4Staking daily reward trees', () => {
     vi.unstubAllEnvs();
   });
 
-  // Expected split of a day's pool, mirroring the daily run: a bucket's weight is liquidity ×
-  // seconds in range, boosted for its seconds before lockedUntil. Every test position has 1e18 L.
-  const inRange = (blocks: number, { lockedBlocks = blocks, boost = 100n } = {}) => ({
-    weight:
-      (10n ** 18n *
-        (BigInt(lockedBlocks * SECONDS_PER_BLOCK) * boost + BigInt((blocks - lockedBlocks) * SECONDS_PER_BLOCK) * 100n)) /
-      100n,
-    base: 10n ** 18n * BigInt(blocks * SECONDS_PER_BLOCK),
-  });
+  // A position's value in ETH while in range at the fixture price (sqrtPriceX96 = 2^96, price 1):
+  // both token amounts at that price, added up.
+  const valueOf = (tokenId: string) => {
+    const { range, liquidity } = nfts[tokenId]!;
+    const sqrtPrice = 2n ** 96n;
+    return (
+      getAmount0(range.tickLower, range.tickUpper, 0n, liquidity, sqrtPrice) +
+      getAmount1(range.tickLower, range.tickUpper, 0n, liquidity, sqrtPrice)
+    );
+  };
+  // Expected split of a day's pool, mirroring the daily run: a bucket's weight is its value ×
+  // seconds in range, boosted for its seconds before lockedUntil.
+  const inRange = (key: string, blocks: number, { lockedBlocks = blocks, boost = 100n } = {}) => {
+    const value = valueOf(key.split(':')[0]!);
+    return {
+      weight:
+        (value *
+          (BigInt(lockedBlocks * SECONDS_PER_BLOCK) * boost + BigInt((blocks - lockedBlocks) * SECONDS_PER_BLOCK) * 100n)) /
+        100n,
+      base: value * BigInt(blocks * SECONDS_PER_BLOCK),
+    };
+  };
   const split = (buckets: Record<string, { weight: bigint; base: bigint }>) => {
     const total = Object.values(buckets).reduce((sum, b) => sum + b.weight, 0n);
     return Object.fromEntries(
@@ -515,7 +539,7 @@ describe('UniswapV4Staking daily reward trees', () => {
   // Shares at 1x, by blocks in range during the day.
   const shares = (blocksInRange: Record<string, number>) =>
     Object.fromEntries(
-      Object.entries(split(Object.fromEntries(Object.entries(blocksInRange).map(([k, b]) => [k, inRange(b)])))).map(
+      Object.entries(split(Object.fromEntries(Object.entries(blocksInRange).map(([k, b]) => [k, inRange(k, b)])))).map(
         ([k, v]) => [k, v.share],
       ),
     ) as Record<string, bigint>;
@@ -643,6 +667,7 @@ describe('UniswapV4Staking daily reward trees', () => {
   it('a swap into range around the daily run earns almost nothing', async (t) => {
     // Bob's narrow range is out of range all of day 2 except one block on each side of the run's
     // previous and current block: the price is moved into his range right before the run.
+    const s1 = shares({ '42:1': 10, '43:1': 10 });
     const s2 = shares({ '42:1': D, '43:1': 2 });
     const changes = await run(
       dayBlock(2),
@@ -652,23 +677,43 @@ describe('UniswapV4Staking daily reward trees', () => {
       swapToTick(dayBlock(2) - 1, 0n),
     );
 
-    expectTree(t, changes, 2, { '42:1': HALF + s2['42:1']!, '43:1': HALF + s2['43:1']! });
+    expectTree(t, changes, 2, { '42:1': s1['42:1']! + s2['42:1']!, '43:1': s1['43:1']! + s2['43:1']! });
     // A one-block snapshot would have given Bob half of the day. Two blocks in range earn him
     // two blocks' worth.
     t.expect(s2['43:1']! < FULL / 1000n).toBe(true);
   });
 
-  it('a position in range for half the day earns half as much as one in range all day', async (t) => {
+  it('equal capital earns equally whatever the range width, and only while in range', async (t) => {
+    // #43 spans one tick spacing each side of the price; #45 is full range. Give #45 the
+    // liquidity that makes it worth the same as #43. By raw liquidity #45 has under 1% of #43's,
+    // so #43 would take almost the whole pool.
+    const valueOfL = (range: typeof FULL_RANGE, liquidity: bigint) =>
+      getAmount0(range.tickLower, range.tickUpper, 0n, liquidity, 2n ** 96n) +
+      getAmount1(range.tickLower, range.tickUpper, 0n, liquidity, 2n ** 96n);
+    const L45 = (10n ** 18n * valueOfL(NARROW_RANGE, 10n ** 18n)) / valueOfL(FULL_RANGE, 10n ** 18n);
+    setNft(45n, DAVE, FULL_RANGE, L45);
+    t.expect(L45 * 100n < 10n ** 18n).toBe(true);
+
     const changes = await run(
-      dayBlock(2),
-      deposit(dayBlock(1) - 10, ALICE, 42n, 1n, { logIndex: 1 }),
-      deposit(dayBlock(1) - 10, BOB, 43n, 1n, { logIndex: 2 }),
-      swapToTick(dayBlock(1) + D / 2, OUT_OF_NARROW_RANGE_TICK),
+      dayBlock(3),
+      deposit(dayBlock(1) - 10, BOB, 43n, 1n, { logIndex: 1 }),
+      deposit(dayBlock(1) - 10, DAVE, 45n, 1n, { logIndex: 2 }),
+      // Halfway through day 3 the price leaves #43's range; full range #45 stays in.
+      swapToTick(dayBlock(2) + D / 2, OUT_OF_NARROW_RANGE_TICK),
     );
 
-    const day2 = new Map(rewardSetsAt(changes, dayBlock(2)).map((r) => [bucketKey(r), r.cumulativeReward - HALF]));
-    t.expect(Object.fromEntries(day2)).toEqual(shares({ '42:1': D, '43:1': D / 2 }));
-    t.expect(day2.get('42:1')! - 2n * day2.get('43:1')! <= 1n).toBe(true);
+    const s1 = shares({ '43:1': 10, '45:1': 10 });
+    const s2 = shares({ '43:1': D, '45:1': D });
+    const s3 = shares({ '43:1': D / 2, '45:1': D });
+    const day2 = addDay(s1, s2);
+    expectTree(t, changes, 2, day2);
+    expectTree(t, changes, 3, addDay(day2, s3));
+
+    // Equal capital in range all day: equal shares, up to rounding of the two values.
+    const close = (a: bigint, b: bigint) => (a > b ? a - b : b - a) < FULL / 1_000_000_000n;
+    t.expect(close(s2['43:1']!, s2['45:1']!)).toBe(true);
+    // Half the day in range earns half as much.
+    t.expect(close(2n * s3['43:1']!, s3['45:1']!)).toBe(true);
   });
 
   // Early exit, then re-stake: the old penalty must not touch the new deposit.
@@ -762,10 +807,10 @@ describe('UniswapV4Staking daily reward trees', () => {
     // Both lock at 2x. Alice stays locked; Carol's lock ends halfway through day 2, after which
     // the contract lets her leave without a slash, so she earns 1x for the rest of the day.
     const BOOST = 200n;
-    const s1 = split({ '42:1': inRange(20, { boost: BOOST }), '44:1': inRange(20, { boost: BOOST }) });
+    const s1 = split({ '42:1': inRange('42:1', 20, { boost: BOOST }), '44:1': inRange('44:1', 20, { boost: BOOST }) });
     const s2 = split({
-      '42:1': inRange(D, { boost: BOOST }),
-      '44:1': inRange(D, { lockedBlocks: D / 2, boost: BOOST }),
+      '42:1': inRange('42:1', D, { boost: BOOST }),
+      '44:1': inRange('44:1', D, { lockedBlocks: D / 2, boost: BOOST }),
     });
     const bonus = (s: { share: bigint; base: bigint }) => s.share - s.base;
     const changes = await run(
@@ -846,6 +891,32 @@ describe('UniswapV4Staking daily reward trees', () => {
     // The forfeited bonus is in no leaf, so the operator never funds it.
     t.expect(day4Tree?.totalCumulativeReward).toBe(3n * THIRD + FULL + kept);
     t.expect(day4Tree?.totalPendingBoostReward).toBe(0n);
+  });
+
+  it('releases a held bonus on a day nobody is in range', async (t) => {
+    // Bob locks at 2x, earns on day 1, then sits out of range. His lock ends during day 2, when
+    // nobody earns. The day 2 run must still build a tree, or his bonus waits for another earner.
+    const BOOST = 200n;
+    const s1 = split({ '43:1': inRange('43:1', 10, { boost: BOOST }) });
+    const changes = await run(
+      dayBlock(3),
+      deposit(dayBlock(1) - 20, BOB, 43n, 1n, {
+        timeBoost: BOOST,
+        lockedUntil: BigInt(timestampOf(dayBlock(1) + D / 2)),
+      }),
+      swapToTick(dayBlock(1) - 10, OUT_OF_NARROW_RANGE_TICK),
+    );
+
+    // Day 1: Bob earned the whole pool at 2x; only the 1x base is in his leaf.
+    expectTree(t, changes, 1, { '43:1': s1['43:1']!.base });
+    // Day 2: no earner, but the lock is over, so the held bonus moves into the leaf.
+    expectTree(t, changes, 2, { '43:1': FULL });
+    const day2Tree = (await indexer.StakingPoolV4RewardTree.getAll()).find((tree) => tree.blockNumber === dayBlock(2));
+    t.expect(day2Tree?.dailyReward).toBe(0n);
+    t.expect(day2Tree?.totalPendingBoostReward).toBe(0n);
+    // Day 3: nothing earned and nothing left to release, so no new tree.
+    t.expect(rewardSetsAt(changes, dayBlock(3))).toHaveLength(0);
+    t.expect(await indexer.StakingPoolV4RewardTree.getAll()).toHaveLength(2);
   });
 
   it('fails the daily run instead of guessing when the block timestamp cannot be read', async (t) => {

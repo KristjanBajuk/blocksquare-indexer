@@ -792,12 +792,12 @@ type UserCumulativeReward {
   "Early-withdraw reward slash stored on-chain for this epoch (100000 scale, 17500 = 17.5%). 0 unless the epoch exited early."
   rewardSlash: BigInt!
   "Boost bonus earned while locked but not in the leaf yet. Released into cumulativeReward once the lock is completed (prorated on an early exit)."
-  pendingBoostReward: BigInt!
+  pendingBoostReward: BigInt! @index
   "Boost bonus dropped on an early exit because the lock was not served. Never enters a leaf and is never funded."
   forfeitedBoostReward: BigInt!
-  "Liquidity × seconds in range × boost since the last daily run: this deposit's claim on the next day's pool. Reset by the daily run."
+  "Capital value in ETH × seconds in range × boost since the last daily run: this deposit's claim on the next day's pool. Reset by the daily run."
   accruedWeight: BigInt! @index
-  "The same liquidity × seconds at 1x, without the boost. accruedWeight − accruedBaseWeight is the boost part."
+  "The same value × seconds at 1x, without the boost. accruedWeight − accruedBaseWeight is the boost part."
   accruedBaseWeight: BigInt!
   cumulativeReward: BigInt!
   claimed: BigInt!
