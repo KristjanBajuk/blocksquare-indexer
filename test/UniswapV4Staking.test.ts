@@ -679,21 +679,80 @@ describe('UniswapV4Staking daily reward trees', () => {
     t.expect(history).toHaveLength(3);
   });
 
-  it('applies the time boost only while the position is locked', async (t) => {
+  it('applies the time boost only while locked, holding the bonus back until the lock ends', async (t) => {
     // Both lock at 2x. Alice stays locked; Carol's lock ends exactly at the day 2 run, when the
     // contract already lets her leave without a slash, so she earns 1x from then on.
     const BOOST = 200n;
-    const day2 = { aliceShare: (FULL * 2n) / 3n, carolShare: FULL / 3n };
+    const base = (share: bigint) => (share * 100n) / BOOST;
+    const aliceDay2 = (FULL * 2n) / 3n; // 2x against 1x
+    const carolDay2 = FULL / 3n;
     const changes = await run(
       dayBlock(2),
       deposit(dayBlock(1) - 20, ALICE, 42n, 1n, { timeBoost: BOOST, lockedUntil: 1_900_000_000n }),
       deposit(dayBlock(1) - 10, CAROL, 44n, 1n, { timeBoost: BOOST, lockedUntil: BigInt(timestampOf(dayBlock(2))) }),
     );
 
-    expectTree(t, changes, 1, { '42:1': HALF, '44:1': HALF }); // both locked: 2x each
-    expectTree(t, changes, 2, { '42:1': HALF + day2.aliceShare, '44:1': HALF + day2.carolShare }); // 2x against 1x
+    // Day 1: both locked at 2x and split the pool, but only the 1x base goes into the leaves.
+    expectTree(t, changes, 1, { '42:1': base(HALF), '44:1': base(HALF) });
+    const day1 = new Map(rewardSetsAt(changes, dayBlock(1)).map((r) => [bucketKey(r), r]));
+    t.expect(day1.get('42:1')!.pendingBoostReward).toBe(HALF - base(HALF));
+    t.expect(day1.get('44:1')!.pendingBoostReward).toBe(HALF - base(HALF));
+
+    // Day 2: Alice is still locked and keeps holding bonus. Carol's lock is over: she earns 1x and
+    // her held bonus is released into her leaf.
+    expectTree(t, changes, 2, {
+      '42:1': base(HALF) + base(aliceDay2),
+      '44:1': base(HALF) + carolDay2 + (HALF - base(HALF)),
+    });
+    const final = await rewards();
+    t.expect(final.get('42:1')!.pendingBoostReward).toBe(HALF - base(HALF) + aliceDay2 - base(aliceDay2));
+    t.expect(final.get('44:1')!.pendingBoostReward).toBe(0n);
+
+    const [day1Tree, day2Tree] = (await indexer.StakingPoolV4RewardTree.getAll()).sort((a, b) => a.blockNumber - b.blockNumber);
+    t.expect(day1Tree?.dailyReward).toBe(HALF + HALF);
+    t.expect(day1Tree?.totalPendingBoostReward).toBe(2n * (HALF - base(HALF)));
+    t.expect(day2Tree?.dailyReward).toBe(aliceDay2 + carolDay2);
+    t.expect(day2Tree?.totalPendingBoostReward).toBe(final.get('42:1')!.pendingBoostReward);
+    // The operator funds only what is in the leaves.
+    t.expect(day2Tree?.totalCumulativeReward).toBe(
+      final.get('42:1')!.cumulativeReward + final.get('44:1')!.cumulativeReward,
+    );
+  });
+
+  it('an early exit keeps only the boost bonus the days served earned', async (t) => {
+    // Pool params from the fixture: lock 7–365 days, boost 1x–2x. Alice declares 365 days (2x)
+    // and leaves after 180, which an honest lock rewards with getBoost(180) = 148 (1.48x).
+    const DAY = 86_400;
+    const stakedAt = timestampOf(dayBlock(1) - 10);
+    const pending = FULL - (FULL * 100n) / 200n;
+    const kept = (pending * (148n - 100n)) / (200n - 100n);
+    const exit = {
+      ...earlyWithdraw(dayBlock(1) + 10, ALICE, 42n, 1n),
+      block: { number: dayBlock(1) + 10, timestamp: stakedAt + 180 * DAY },
+    } as ChainSimulate[number];
+
+    const changes = await run(
+      dayBlock(2),
+      deposit(dayBlock(1) - 10, ALICE, 42n, 1n, { timeBoost: 200n, lockedUntil: BigInt(stakedAt + 365 * DAY) }),
+      exit,
+      // Bob keeps the pool in range on day 2, so a tree is built and Alice's kept bonus released.
+      deposit(dayBlock(1) + 20, BOB, 43n, 1n),
+    );
+
+    expectTree(t, changes, 1, { '42:1': FULL / 2n });
+    const atExit = rewardSetsAt(changes, dayBlock(1) + 10).find((r) => bucketKey(r) === '42:1')!;
+    t.expect(atExit.cumulativeReward).toBe(FULL / 2n); // unchanged until the next tree
+    t.expect(atExit.pendingBoostReward).toBe(kept);
+    t.expect(atExit.forfeitedBoostReward).toBe(pending - kept);
+    t.expect(atExit.rewardSlash).toBe(REWARD_SLASH);
+
+    expectTree(t, changes, 2, { '42:1': FULL / 2n + kept, '43:1': FULL });
+    const alice = (await rewards()).get('42:1')!;
+    t.expect(alice.pendingBoostReward).toBe(0n);
+    t.expect(alice.forfeitedBoostReward).toBe(pending - kept);
     const [, day2Tree] = (await indexer.StakingPoolV4RewardTree.getAll()).sort((a, b) => a.blockNumber - b.blockNumber);
-    t.expect(day2Tree?.dailyReward).toBe(day2.aliceShare + day2.carolShare);
+    // The forfeited bonus is in no leaf, so the operator never funds it.
+    t.expect(day2Tree?.totalCumulativeReward).toBe(FULL / 2n + kept + FULL);
   });
 
   it('fails the daily run instead of guessing when the block timestamp cannot be read', async (t) => {

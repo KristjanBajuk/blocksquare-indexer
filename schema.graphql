@@ -709,6 +709,8 @@ type StakingPoolV4Position {
   "Epoch of the latest deposit. The contract starts a new reward bucket (tokenId, epoch) on every deposit."
   epoch: BigInt!
   liquidity: BigInt!
+  "Timestamp of the latest deposit, as the contract stores it. Used to prorate the boost on an early exit."
+  stakingTimestamp: Int!
   isPositionClosed: Boolean!
   updatedAtTimestamp: Int!
   wallet: Wallet!
@@ -729,8 +731,10 @@ type StakingPoolV4RewardTree {
   leafCount: Int!
   "Sum of all leaves' cumulative rewards: the total the contract must be funded with once this root is live"
   totalCumulativeReward: BigInt!
-  "Rewards added by this run (today's shares; at most TOTAL_DAILY_REWARDS, minus rounding dust)"
+  "Rewards allocated by this run (today's shares, held-back boost bonus included; at most TOTAL_DAILY_REWARDS, minus rounding dust)"
   dailyReward: BigInt!
+  "Boost bonus held back from the leaves until each deposit's lock is completed; not yet funded"
+  totalPendingBoostReward: BigInt!
   isPublished: Boolean!
   publishedAtTimestamp: Int
   publishedTransactionHash: String
@@ -785,6 +789,10 @@ type UserCumulativeReward {
   epoch: BigInt! @index
   "Early-withdraw reward slash stored on-chain for this epoch (100000 scale, 17500 = 17.5%). 0 unless the epoch exited early."
   rewardSlash: BigInt!
+  "Boost bonus earned while locked but not in the leaf yet. Released into cumulativeReward once the lock is completed (prorated on an early exit)."
+  pendingBoostReward: BigInt!
+  "Boost bonus dropped on an early exit because the lock was not served. Never enters a leaf and is never funded."
+  forfeitedBoostReward: BigInt!
   cumulativeReward: BigInt!
   claimed: BigInt!
   burned: BigInt!

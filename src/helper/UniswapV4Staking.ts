@@ -1,13 +1,17 @@
 import type {
   EvmEvent,
   EvmOnEventContext,
+  StakingPoolV4,
   StakingPoolV4PositionRecord,
   UniswapV4PositionToken,
   UserCumulativeReward,
 } from 'envio';
 
 import { getDay } from './date';
+import { BOOST_PRECISION } from './UniswapV4Helpers/utils';
 import { StakingPoolV4PositionRecordType } from '../types/enums';
+
+const SECONDS_PER_DAY = 86400n;
 
 export const getStakingPoolId = (chainId: number, contractAddress: string) =>
   `${chainId}-${contractAddress}`;
@@ -90,6 +94,8 @@ export const getNewUserCumulativeReward = ({
   tokenId,
   epoch,
   rewardSlash: 0n,
+  pendingBoostReward: 0n,
+  forfeitedBoostReward: 0n,
   cumulativeReward: 0n,
   claimed: 0n,
   burned: 0n,
@@ -106,6 +112,41 @@ export const getNewUserCumulativeReward = ({
   stakingPool_id: stakingPoolId,
   uniPosition_id: uniPositionId,
 });
+
+/** Port of the contract's `_getBoost(days)`: the boost an honest lock of `days` earns. */
+export const getLockBoost = (
+  days: bigint,
+  pool: Pick<StakingPoolV4, 'minDays' | 'maxDays' | 'minBoost' | 'maxBoost'>,
+) => {
+  if (days < pool.minDays) return BOOST_PRECISION;
+  if (days >= pool.maxDays) return pool.maxBoost;
+  return ((days - pool.minDays) * (pool.maxBoost - pool.minBoost)) / (pool.maxDays - pool.minDays) + pool.minBoost;
+};
+
+/**
+ * The part of a deposit's held boost bonus that an early exit keeps: the bonus an honest lock of
+ * the days actually served would have earned. A 365-day lock left on day 180 keeps the bonus of
+ * a 180-day lock, so declaring a longer lock than you serve never pays more than the honest one.
+ */
+export const getReleasableBoostReward = ({
+  pending,
+  timeBoost,
+  stakingTimestamp,
+  exitTimestamp,
+  pool,
+}: {
+  pending: bigint;
+  timeBoost: bigint;
+  stakingTimestamp: number;
+  exitTimestamp: number;
+  pool: Pick<StakingPoolV4, 'minDays' | 'maxDays' | 'minBoost' | 'maxBoost'>;
+}) => {
+  if (timeBoost <= BOOST_PRECISION) return 0n;
+  const daysServed = BigInt(exitTimestamp - stakingTimestamp) / SECONDS_PER_DAY;
+  const earnedBoost = getLockBoost(daysServed, pool);
+  const servedBoost = earnedBoost < timeBoost ? earnedBoost : timeBoost;
+  return (pending * (servedBoost - BOOST_PRECISION)) / (timeBoost - BOOST_PRECISION);
+};
 
 /**
  * Resolves who a claim/burn for `tokenId` belongs to. The events only carry the tokenId and epoch,
