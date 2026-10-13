@@ -13,6 +13,7 @@ import {
   TOTAL_DAILY_REWARDS,
 } from "../helper/UniswapV4Helpers/utils";
 import { calculateActiveLiquidity } from "../helper/UniswapV4Helpers/liquidityAmounts";
+import { getBlockTimestamp } from "../helper/blockTimestamp";
 import { StakingPoolV4PositionRecordType } from "../types/enums";
 import {
   getNewUserCumulativeReward,
@@ -282,7 +283,7 @@ indexer.onBlock(
      * reward Merkle tree for the Uniswap V4 staking pool.
      *
      * Today's reward pool is split between open, in-range staked positions by active
-     * liquidity × time boost, and each share is added to the cumulative reward record of
+     * liquidity × time boost (only while the position is still locked), and each share is added to the cumulative reward record of
      * that position's current deposit (one record per (tokenId, epoch)). The tree covers
      * every deposit that has ever earned: records that didn't earn today carry forward
      * unchanged, because the contract only accepts proofs against its latest root. Every record in the tree is
@@ -312,6 +313,11 @@ indexer.onBlock(
     ].sort((a, b) => a.updatedAtTimestamp - b.updatedAtTimestamp);
     if (activeStakedPositions.length === 0) return;
 
+    // Block handlers only receive the block number, so the run's timestamp is read from the chain.
+    const now = BigInt(
+      await context.effect(getBlockTimestamp, { chainId: loadedChainId, blockNumber: block.number }),
+    );
+
     const uniPositions = await context.UniswapV4PoolPosition.getWhere({
       pool_id: { _eq: uniV4Pool.id },
     });
@@ -340,10 +346,11 @@ indexer.onBlock(
 
       // Apply time-based boost to active liquidity.
       // `timeBoost` is expressed as a percentage with base 100 (e.g. 100 = 1.0x, 122 = 1.22x).
-      // This increases a position's reward share proportionally to its lock duration.
+      // It pays for the promise not to leave, so it applies only while the position is locked.
+      // From `lockedUntil` on, the contract lets the position exit without a slash, and it earns 1x.
       // Effective liquidity = active liquidity × boost multiplier.
-      const effectiveLiquidity =
-        (activeLiquidity * stakedPosition.timeBoost) / BOOST_PRECISION;
+      const boost = now < stakedPosition.lockedUntil ? stakedPosition.timeBoost : BOOST_PRECISION;
+      const effectiveLiquidity = (activeLiquidity * boost) / BOOST_PRECISION;
 
       totalEffectiveLiquidity += effectiveLiquidity;
       rewardCandidates.push({

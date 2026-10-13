@@ -1,6 +1,6 @@
 process.env.ENVIO_NETWORK = 'testnet';
 
-import { describe, it, beforeEach } from 'vitest';
+import { describe, it, beforeEach, afterEach, vi } from 'vitest';
 import { createTestIndexer, type TestIndexer, type TestIndexerProcessConfig } from 'envio';
 import { AbiCoder, concat, keccak256, ZeroAddress } from 'ethers';
 import { CHAIN_ID, addr } from './fixtures';
@@ -317,8 +317,21 @@ const verifyProof = (
   return node === root;
 };
 
+// Block timestamps in these tests: one second per block, so events and the RPC stub agree.
+const timestampOf = (blockNumber: number) => 1_700_000_000 + blockNumber;
+
+// The daily run reads its block timestamp over RPC (getBlockTimestamp). Answer it from timestampOf.
+const stubBlockTimestampRpc = () => {
+  vi.stubEnv('SEPOLIA_RPC_URL', 'http://rpc.test');
+  vi.stubGlobal('fetch', async (_url: string, init: { body: string }) => {
+    const [blockHex] = JSON.parse(init.body).params as [string];
+    const timestamp = `0x${timestampOf(parseInt(blockHex, 16)).toString(16)}`;
+    return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result: { timestamp } }));
+  });
+};
+
 const txAt = (blockNumber: number, from: `0x${string}`) => ({
-  block: { number: blockNumber, timestamp: 1_700_000_000 + blockNumber },
+  block: { number: blockNumber, timestamp: timestampOf(blockNumber) },
   transaction: { hash: `0x${blockNumber.toString(16).padStart(64, '0')}`, from },
 });
 
@@ -337,8 +350,14 @@ const stakingEvent = (
     params,
   }) as unknown as ChainSimulate[number];
 
-const deposit = (blockNumber: number, owner: `0x${string}`, tokenId: bigint, epoch: bigint) =>
-  stakingEvent('Deposit', blockNumber, { owner, tokenId, epoch, liquidity: 10n ** 18n, lockedUntil: 1_800_000_000n, timeBoost: 100n }, owner);
+const deposit = (
+  blockNumber: number,
+  owner: `0x${string}`,
+  tokenId: bigint,
+  epoch: bigint,
+  { lockedUntil = 1_800_000_000n, timeBoost = 100n }: { lockedUntil?: bigint; timeBoost?: bigint } = {},
+) =>
+  stakingEvent('Deposit', blockNumber, { owner, tokenId, epoch, liquidity: 10n ** 18n, lockedUntil, timeBoost }, owner);
 const earlyWithdraw = (blockNumber: number, owner: `0x${string}`, tokenId: bigint, epoch: bigint) =>
   stakingEvent(
     'EarlyWithdraw',
@@ -459,7 +478,14 @@ describe('UniswapV4Staking daily reward trees', () => {
     }
   };
 
-  beforeEach(newIndexer);
+  beforeEach(() => {
+    stubBlockTimestampRpc();
+    newIndexer();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
+  });
 
   it('keeps every reward bucket claimable across out-of-range days, withdrawals and resales', async (t) => {
     const day1 = { '42:1': THIRD, '43:1': THIRD, '44:1': THIRD };
@@ -651,6 +677,30 @@ describe('UniswapV4Staking daily reward trees', () => {
       ['REWARDS_CLAIMED', 'REWARDS_BURNED'].includes(r.transactionType),
     );
     t.expect(history).toHaveLength(3);
+  });
+
+  it('applies the time boost only while the position is locked', async (t) => {
+    // Both lock at 2x. Alice stays locked; Carol's lock ends exactly at the day 2 run, when the
+    // contract already lets her leave without a slash, so she earns 1x from then on.
+    const BOOST = 200n;
+    const day2 = { aliceShare: (FULL * 2n) / 3n, carolShare: FULL / 3n };
+    const changes = await run(
+      dayBlock(2),
+      deposit(dayBlock(1) - 20, ALICE, 42n, 1n, { timeBoost: BOOST, lockedUntil: 1_900_000_000n }),
+      deposit(dayBlock(1) - 10, CAROL, 44n, 1n, { timeBoost: BOOST, lockedUntil: BigInt(timestampOf(dayBlock(2))) }),
+    );
+
+    expectTree(t, changes, 1, { '42:1': HALF, '44:1': HALF }); // both locked: 2x each
+    expectTree(t, changes, 2, { '42:1': HALF + day2.aliceShare, '44:1': HALF + day2.carolShare }); // 2x against 1x
+    const [, day2Tree] = (await indexer.StakingPoolV4RewardTree.getAll()).sort((a, b) => a.blockNumber - b.blockNumber);
+    t.expect(day2Tree?.dailyReward).toBe(day2.aliceShare + day2.carolShare);
+  });
+
+  it('fails the daily run instead of guessing when the block timestamp cannot be read', async (t) => {
+    vi.unstubAllEnvs();
+    vi.stubEnv('SEPOLIA_RPC_URL', '');
+    await t.expect(run(dayBlock(1), deposit(dayBlock(1) - 10, ALICE, 42n, 1n))).rejects.toThrow();
+    t.expect(await indexer.StakingPoolV4RewardTree.getAll()).toHaveLength(0);
   });
 
   it('does not produce a new root when no staked position is in range', async (t) => {
