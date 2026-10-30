@@ -161,6 +161,9 @@ describe('UniswapV4Staking', () => {
     t.expect(pool.earlyPositionSlash).toBe(10n);
     t.expect(pool.earlyRewardSlash).toBe(50n);
     t.expect(pool.totalRewardsAdded).toBe(0n);
+    t.expect(pool.carryOverReward).toBe(0n);
+    // LPStakingInit carries only the maximum slash rates.
+    t.expect(pool.earlyMinimumPositionSlash).toBeUndefined();
     t.expect(pool.uniswapV4Pool_id).toBe(UNI_POOL_ENTITY_ID);
   });
 
@@ -340,7 +343,14 @@ const txAt = (blockNumber: number, from: `0x${string}`) => ({
 });
 
 const stakingEvent = (
-  event: 'Deposit' | 'Withdraw' | 'EarlyWithdraw' | 'Reward' | 'RewardsClaimed' | 'RewardsBurned',
+  event:
+    | 'Deposit'
+    | 'Withdraw'
+    | 'EarlyWithdraw'
+    | 'EarlyWithdrawSlashRatesUpdated'
+    | 'Reward'
+    | 'RewardsClaimed'
+    | 'RewardsBurned',
   blockNumber: number,
   params: Record<string, unknown>,
   from: `0x${string}` = RELAYER,
@@ -485,10 +495,13 @@ describe('UniswapV4Staking daily reward trees', () => {
       maxBoost: 200n,
       earlyPositionSlash: 10n,
       earlyRewardSlash: 50n,
+      earlyMinimumPositionSlash: undefined,
+      earlyMinimumRewardSlash: undefined,
       totalRewardsAdded: 0n,
       totalRewardsClaimed: 0n,
       totalRewardsBurned: 0n,
       lastAccrualTimestamp: 0,
+      carryOverReward: 0n,
       createdAtTimestamp: 1_699_999_000,
       creationTransaction: `0x${'bb'.repeat(32)}`,
       uniswapV4Pool_id: UNI_POOL_ENTITY_ID,
@@ -908,17 +921,59 @@ describe('UniswapV4Staking daily reward trees', () => {
     t.expect(atExit.rewardSlash).toBe(REWARD_SLASH);
     // The part of day 4 before the exit is prorated too: 3x cut to 2x.
     t.expect(atExit.accruedWeight).toBe(2n * atExit.accruedBaseWeight);
+    // The forfeited bonus goes back into the next daily pool.
+    const forfeited = held - kept;
+    const poolAtExit = changes.find((c) => c.block === exitBlock)?.StakingPoolV4?.sets?.at(-1);
+    t.expect(poolAtExit?.carryOverReward).toBe(forfeited);
 
-    // Day 4: Alice earns the whole pool for her last blocks at 2x, and everything she kept is
-    // released because she is no longer staked.
-    expectTree(t, changes, 4, { '42:1': 3n * THIRD + FULL + kept });
+    // Day 4: the pool is the day's emission plus the forfeited bonus. Alice is its only earner (her
+    // last blocks, at 2x), so it comes back to her; everything she kept is released because she is
+    // no longer staked.
+    expectTree(t, changes, 4, { '42:1': 3n * THIRD + FULL + forfeited + kept });
     const alice = (await rewards()).get('42:1')!;
     t.expect(alice.pendingBoostReward).toBe(0n);
-    t.expect(alice.forfeitedBoostReward).toBe(held - kept);
+    t.expect(alice.forfeitedBoostReward).toBe(forfeited);
     const day4Tree = (await indexer.StakingPoolV4RewardTree.getAll()).find((tree) => tree.blockNumber === dayBlock(4));
-    // The forfeited bonus is in no leaf, so the operator never funds it.
-    t.expect(day4Tree?.totalCumulativeReward).toBe(3n * THIRD + FULL + kept);
+    t.expect(day4Tree?.dailyReward).toBe(FULL + forfeited);
+    t.expect(day4Tree?.totalCumulativeReward).toBe(3n * THIRD + FULL + forfeited + kept);
     t.expect(day4Tree?.totalPendingBoostReward).toBe(0n);
+    t.expect((await indexer.StakingPoolV4.getOrThrow(STAKING_POOL_ENTITY_ID)).carryOverReward).toBe(0n);
+  });
+
+  it('pays the bonus forfeited by an early exit to the other stakers, so the whole emission is paid', async (t) => {
+    // Short-lock pool: lock 1–3 days, boost 1x–3x. Alice locks 3 days at 3x and leaves after 2;
+    // Carol stakes the same capital at 1x and stays.
+    const pool = await indexer.StakingPoolV4.getOrThrow(STAKING_POOL_ENTITY_ID);
+    indexer.StakingPoolV4.set({ ...pool, minDays: 1n, maxDays: 3n, minBoost: 100n, maxBoost: 300n });
+    const DAY = 86_400 / SECONDS_PER_BLOCK;
+    const depositBlock = dayBlock(1) - 10;
+    const exitBlock = depositBlock + 2 * DAY; // during day 4
+    const changes = await run(
+      dayBlock(5),
+      deposit(depositBlock, ALICE, 42n, 1n, {
+        timeBoost: 300n,
+        lockedUntil: BigInt(timestampOf(depositBlock + 3 * DAY)),
+        logIndex: 1,
+      }),
+      deposit(depositBlock, CAROL, 44n, 1n, { logIndex: 2 }),
+      earlyWithdraw(exitBlock, ALICE, 42n, 1n),
+    );
+
+    const forfeited = (await rewards()).get('42:1')!.forfeitedBoostReward;
+    t.expect(forfeited > 0n).toBe(true);
+    const trees = (await indexer.StakingPoolV4RewardTree.getAll()).sort((a, b) => a.blockNumber - b.blockNumber);
+    t.expect(trees).toHaveLength(5);
+    // Day 4's pool is the emission plus what Alice forfeited (minus rounding dust), split by weight.
+    const day4Pool = FULL + forfeited;
+    t.expect(day4Pool - trees[3]!.dailyReward <= 2n).toBe(true);
+    // Day 5 is back to the plain emission: the carry-over was used once.
+    t.expect(FULL - trees[4]!.dailyReward <= 2n).toBe(true);
+    t.expect((await indexer.StakingPoolV4.getOrThrow(STAKING_POOL_ENTITY_ID)).carryOverReward).toBe(0n);
+    // Everything emitted over the five days is in a leaf or still held for a locked deposit.
+    const last = trees[4]!;
+    const paid = last.totalCumulativeReward + last.totalPendingBoostReward;
+    t.expect(5n * FULL - paid >= 0n && 5n * FULL - paid <= 10n).toBe(true);
+    t.expect(rewardSetsAt(changes, dayBlock(5)).length).toBe(2);
   });
 
   it('a dust NFT minted in the same transaction as a large one earns only for its own liquidity', async (t) => {
@@ -1032,6 +1087,65 @@ describe('UniswapV4Staking daily reward trees', () => {
     t.expect(history?.wallet_id).toBe(wallet(DAVE));
     // Dave never staked #44: the claim links to Carol's position, which earned the rewards.
     t.expect(history?.stakingPosition_id).toBe(`${CHAIN_ID}-${CAROL}-44`);
+  });
+
+  it('a claim inside withdraw stays with the staker, not the staking contract holding the NFT', async (t) => {
+    const exit = dayBlock(1) + 11;
+    await run(
+      dayBlock(2),
+      // The contract holds the NFT while it is staked.
+      nftTransfer(dayBlock(1) - 11, CAROL, STAKING_ADDRESS, 44n),
+      deposit(dayBlock(1) - 10, CAROL, 44n, 1n),
+      publishRoot(dayBlock(1) + 10, rootOf({ '44:1': FULL })),
+      // withdraw(tokenId, cumulative, proof): Withdraw, then the claim, then the NFT goes back.
+      stakingEvent('Withdraw', exit, { owner: CAROL, tokenId: 44n, liquidity: 10n ** 18n }, CAROL, 1),
+      claim(exit, 44n, 1n, FULL, 2),
+      nftTransfer(exit, STAKING_ADDRESS, CAROL, 44n, 3),
+    );
+
+    const record = (await rewards()).get('44:1')!;
+    t.expect(record.claimed).toBe(FULL);
+    t.expect(record.wallet_id).toBe(wallet(CAROL));
+    const history = (await indexer.StakingPoolV4PositionRecord.getAll()).find((r) => r.transactionType === 'REWARDS_CLAIMED');
+    t.expect(history?.wallet_id).toBe(wallet(CAROL));
+  });
+
+  it('publishing a backlog of roots in order marks every record distributed', async (t) => {
+    const r1 = rootOf({ '42:1': FULL });
+    const r2 = rootOf({ '42:1': 2n * FULL });
+    const changes = await run(
+      dayBlock(2) + 11,
+      deposit(dayBlock(1) - 10, ALICE, 42n, 1n),
+      // Both trees are built before the operator publishes either.
+      publishRoot(dayBlock(2) + 10, r1),
+      publishRoot(dayBlock(2) + 11, r2),
+    );
+
+    // Publishing R1 leaves the record, already on R2, pending for R2.
+    const afterR1 = rewardSetsAt(changes, dayBlock(2) + 10);
+    t.expect(afterR1).toHaveLength(0);
+    const record = (await rewards()).get('42:1')!;
+    t.expect(record.merkleRoot).toBe(r2);
+    t.expect(record.isRewardsDistributed).toBe(true);
+    t.expect(record.distributionSkipped).toBe(false);
+    t.expect(record.lastDistributedMerkleRoot).toBe(r2);
+    t.expect(record.lastDistributedCumulativeReward).toBe(2n * FULL);
+  });
+
+  it('EarlyWithdrawSlashRatesUpdated stores the new minimum and maximum slash rates', async (t) => {
+    await run(
+      dayBlock(1) - 1,
+      stakingEvent('EarlyWithdrawSlashRatesUpdated', dayBlock(1) - 1, {
+        minimumPositionSlash: 1_000n,
+        maximumPositionSlash: 20_000n,
+        minimumRewardSlash: 2_000n,
+        maximumRewardSlash: 30_000n,
+      }),
+    );
+
+    const pool = await indexer.StakingPoolV4.getOrThrow(STAKING_POOL_ENTITY_ID);
+    t.expect([pool.earlyMinimumPositionSlash, pool.earlyPositionSlash]).toEqual([1_000n, 20_000n]);
+    t.expect([pool.earlyMinimumRewardSlash, pool.earlyRewardSlash]).toEqual([2_000n, 30_000n]);
   });
 
   // History records used to be keyed by (hour, logIndex), and logIndex only counts within one block,

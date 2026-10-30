@@ -689,8 +689,14 @@ type StakingPoolV4 {
   maxDays: BigInt!
   minBoost: BigInt!
   maxBoost: BigInt!
+  "Maximum early-withdraw position slash (100000 scale)"
   earlyPositionSlash: BigInt!
+  "Maximum early-withdraw reward slash (100000 scale)"
   earlyRewardSlash: BigInt!
+  "Minimum early-withdraw position slash; unknown (null) until the first EarlyWithdrawSlashRatesUpdated, since LPStakingInit carries only the maximums"
+  earlyMinimumPositionSlash: BigInt
+  "Minimum early-withdraw reward slash; null until the first EarlyWithdrawSlashRatesUpdated"
+  earlyMinimumRewardSlash: BigInt
   createdAtTimestamp: Int!
   creationTransaction: String!
   totalRewardsAdded: BigInt!
@@ -698,6 +704,8 @@ type StakingPoolV4 {
   totalRewardsBurned: BigInt!
   "When staked positions' reward weights were last accrued (seconds). Weight accrues per second in range, not per daily snapshot."
   lastAccrualTimestamp: Int!
+  "Boost bonus forfeited by early exits since the last tree, added to the next daily run's pool"
+  carryOverReward: BigInt!
   uniswapV4Pool: UniswapV4Pool!
   positions: [StakingPoolV4Position!]! @derivedFrom(field: "pool")
   positionRecords: [StakingPoolV4PositionRecord!]! @derivedFrom(field: "pool")
@@ -728,6 +736,8 @@ type StakingPoolV4Position {
 
 # One per daily reward run that builds a tree. The operator reads the latest one to call
 # addReward(amount, merkleRoot), where amount = totalCumulativeReward - pool.totalRewardsAdded.
+# Never fund `dailyReward`: it is not what the leaves add, and a tree that only releases held
+# bonus has dailyReward = 0, which addReward rejects.
 type StakingPoolV4RewardTree {
   id: ID! # ${stakingPoolId}-${blockNumber}
   chainId: Int!
@@ -737,7 +747,7 @@ type StakingPoolV4RewardTree {
   leafCount: Int!
   "Sum of all leaves' cumulative rewards: the total the contract must be funded with once this root is live"
   totalCumulativeReward: BigInt!
-  "Rewards allocated by this run (today's shares, held-back boost bonus included; at most TOTAL_DAILY_REWARDS, minus rounding dust)"
+  "Rewards allocated by this run (today's shares, held-back boost bonus included; at most TOTAL_DAILY_REWARDS plus the pool's carried-over forfeited bonus, minus rounding dust). 0 for a tree that only releases held bonus. Not the amount to fund."
   dailyReward: BigInt!
   "Boost bonus held back from the leaves until each deposit's lock is completed; not yet funded"
   totalPendingBoostReward: BigInt!
@@ -814,6 +824,7 @@ type UserCumulativeReward {
   lastDistributedProof: [String!]!
   lastDistributedMerkleRoot: String!
   isRewardsDistributed: Boolean!
+  "Always false: a publish no longer marks other roots' records skipped, it leaves them pending. Kept for API compatibility."
   distributionSkipped: Boolean!
   wallet: Wallet!
   stakingPool: StakingPoolV4! @index

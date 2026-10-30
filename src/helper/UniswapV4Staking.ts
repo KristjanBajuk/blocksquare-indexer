@@ -247,6 +247,8 @@ export const getReleasableBoostReward = ({
  * Resolves who a claim/burn for `tokenId` belongs to. The events only carry the tokenId and epoch,
  * and `transaction.from` can be a relayer or bundler, so it cannot be used.
  * - Staked: the staker of the open position.
+ * - Claimed inside `withdraw`: the staker of the position that just closed. The contract pays the
+ *   claim before it sends the NFT back, so the NFT is still held by the staking contract.
  * - Unstaked: the current NFT holder; the history record links the latest closed position.
  */
 export const resolveRewardOwner = async (
@@ -269,8 +271,14 @@ export const resolveRewardOwner = async (
   // `walletId` names the holder.
   const stakingPosition = openPosition ?? stakingPositions[0];
 
+  const heldByStaking =
+    positionToken.owner.toLowerCase() === getLoadedConfig().uniswapV4StakingAddress.toLowerCase();
+
   return {
-    walletId: openPosition?.wallet_id ?? positionToken.wallet_id,
+    walletId:
+      openPosition?.wallet_id ??
+      (heldByStaking ? stakingPositions[0]?.wallet_id : undefined) ??
+      positionToken.wallet_id,
     stakingPositionId:
       stakingPosition?.id ??
       getStakingPositionId(chainId, positionToken.owner, positionToken.tokenId),
