@@ -1,9 +1,9 @@
-import { ethers, keccak256, parseUnits } from "ethers";
+import { ethers, keccak256 } from "ethers";
 import { MerkleTree } from "merkletreejs";
+import { getLoadedConfig } from "../../config";
 
-// Total monthly rewards distributed to stakers in wei.
-// TODO: this set to 300 for testing, we should replace this with the correct amount for mainnet
-export const TOTAL_MONTHLY_REWARDS = parseUnits("300", 18);
+// Total monthly rewards distributed to stakers in wei, set per chain in the config.
+export const TOTAL_MONTHLY_REWARDS = getLoadedConfig().uniswapV4StakingMonthlyRewards;
 
 // Daily reward amount = monthly / 30 (integer division).
 export const TOTAL_DAILY_REWARDS = TOTAL_MONTHLY_REWARDS / 30n;
@@ -61,17 +61,6 @@ export const getPredictedDailyBlockCount = (chainId: number) => {
     return chainId === SEPOLIA_CHAIN_ID ? 7080 : 7200;
 }
 
-/**
- * Returns the block number at which the Uniswap V4 Staking contract was deployed
- * on the specified chain. Used as the startBlock for daily reward calculations.
- *
- * @param chainId - The chain ID.
- * @returns The deployment block number.
- */
-export const getUniswapV4StakingDeployementBlock = (chainId: number) => {
-    // TODO: Replace with mainnet deployment block when available.
-    return chainId === SEPOLIA_CHAIN_ID ? 10245814 : 10245814;
-}
 // Uniswap V4 poolId = keccak256(abi.encode(PoolKey)).
 export const computeV4PoolId = (
   currency0: string,

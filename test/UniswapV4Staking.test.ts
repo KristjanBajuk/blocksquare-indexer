@@ -8,10 +8,10 @@ import {
   buildMerkleTree,
   compareRewardBuckets,
   getPredictedDailyBlockCount,
-  getUniswapV4StakingDeployementBlock,
   TOTAL_DAILY_REWARDS,
 } from '../src/helper/UniswapV4Helpers/utils';
 import { getNewUserCumulativeReward } from '../src/helper/UniswapV4Staking';
+import { getLoadedConfig } from '../src/config';
 import { getAmount0, getAmount1 } from '../src/helper/UniswapV4Helpers/liquidityAmounts';
 
 type ChainSimulate = NonNullable<
@@ -261,7 +261,7 @@ describe('UniswapV4Staking', () => {
 // read back per block from the returned changes.
 // ---------------------------------------------------------------------------
 
-const DEPLOY_BLOCK = getUniswapV4StakingDeployementBlock(CHAIN_ID);
+const DEPLOY_BLOCK = getLoadedConfig().uniswapV4StakingStartBlock;
 const DAY_BLOCKS = getPredictedDailyBlockCount(CHAIN_ID);
 const dayBlock = (day: number) => DEPLOY_BLOCK + (day - 1) * DAY_BLOCKS;
 

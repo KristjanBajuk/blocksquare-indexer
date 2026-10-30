@@ -8,7 +8,6 @@ import {
   compareRewardBuckets,
   computeV4PoolId,
   getPredictedDailyBlockCount,
-  getUniswapV4StakingDeployementBlock,
   TOTAL_DAILY_REWARDS,
 } from "../helper/UniswapV4Helpers/utils";
 import { getBlockTimestamp } from "../helper/blockTimestamp";
@@ -23,7 +22,11 @@ import {
   writeStakingHistoryRecord,
 } from "../helper/UniswapV4Staking";
 
-const { uniswapV4StakingAddress, chainId: loadedChainId } = getLoadedConfig();
+const {
+  uniswapV4StakingAddress,
+  uniswapV4StakingStartBlock,
+  chainId: loadedChainId,
+} = getLoadedConfig();
 
 indexer.onEvent({ contract: "UniswapV4Staking", event: "LPStakingInit" }, async ({ event, context }) => {
   /**
@@ -310,7 +313,7 @@ indexer.onBlock(
       return {
         block: {
           number: {
-            _gte: getUniswapV4StakingDeployementBlock(loadedChainId),
+            _gte: uniswapV4StakingStartBlock,
             _every: getPredictedDailyBlockCount(loadedChainId),
           },
         },
