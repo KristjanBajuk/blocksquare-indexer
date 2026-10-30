@@ -18,6 +18,12 @@ const SECONDS_PER_DAY = 86400n;
 export const getStakingPoolId = (chainId: number, contractAddress: string) =>
   `${chainId}-${contractAddress}`;
 
+/**
+ * The v4 position record of a PositionManager NFT. The PositionManager uses salt = bytes32(tokenId),
+ * so ModifyLiquidity can key it by token id, the same id the NFT's Transfer handler links to.
+ */
+export const getUniswapV4PoolPositionId = (chainId: number, tokenId: bigint) => `${chainId}-${tokenId}`;
+
 /** One staking position per (owner, NFT): a re-deposit by the same owner reopens it. */
 export const getStakingPositionId = (chainId: number, owner: string, tokenId: bigint) =>
   `${chainId}-${owner}-${tokenId}`;
@@ -177,7 +183,8 @@ export const accrueStakingWeights = async (
 
     // The tick and price in the store are the ones that held since `from`.
     const value = getActivePositionValue(uniPosition, uniV4Pool.tick, uniV4Pool.sqrtPriceX96);
-    if (value === 0n) continue;
+    // A position record should never be negative, but one that is must never subtract weight.
+    if (value <= 0n) continue;
 
     // The boost pays for the promise not to leave, so it applies only to seconds before lockedUntil.
     const lockedEnd = position.lockedUntil < BigInt(now) ? position.lockedUntil : BigInt(now);

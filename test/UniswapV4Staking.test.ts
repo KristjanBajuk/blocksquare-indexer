@@ -386,8 +386,35 @@ const swapToTick = (blockNumber: number, tick: bigint) =>
     ...txAt(blockNumber, RELAYER),
     params: { id: POOL_ID, sender: RELAYER, amount0: 1n, amount1: -1n, sqrtPriceX96: 79228162514264337593543950336n, liquidity: 10n ** 18n, tick, fee: 3000n },
   }) as unknown as ChainSimulate[number];
-const nftTransfer = (blockNumber: number, from: `0x${string}`, to: `0x${string}`, id: bigint) =>
-  ({ contract: 'UniswapV4PositionManager', event: 'Transfer', ...txAt(blockNumber, from), params: { from, to, id } }) as unknown as ChainSimulate[number];
+const nftTransfer = (blockNumber: number, from: `0x${string}`, to: `0x${string}`, id: bigint, logIndex?: number) =>
+  ({
+    contract: 'UniswapV4PositionManager',
+    event: 'Transfer',
+    ...txAt(blockNumber, from),
+    ...(logIndex === undefined ? {} : { logIndex }),
+    params: { from, to, id },
+  }) as unknown as ChainSimulate[number];
+// A PositionManager liquidity change of NFT `tokenId` (salt = bytes32(tokenId)).
+const nftLiquidity = (
+  blockNumber: number,
+  tokenId: bigint,
+  liquidityDelta: bigint,
+  range: { tickLower: bigint; tickUpper: bigint },
+  logIndex: number,
+) =>
+  ({
+    contract: 'UniswapV4PoolManager',
+    event: 'ModifyLiquidity',
+    ...txAt(blockNumber, RELAYER),
+    logIndex,
+    params: {
+      id: POOL_ID,
+      sender: POSITION_MANAGER_ADDRESS,
+      ...range,
+      liquidityDelta,
+      salt: `0x${tokenId.toString(16).padStart(64, '0')}`,
+    },
+  }) as unknown as ChainSimulate[number];
 
 type Changes = Awaited<ReturnType<TestIndexer['process']>>['changes'];
 const rewardSetsAt = (changes: Changes, block: number) =>
@@ -417,6 +444,7 @@ describe('UniswapV4Staking daily reward trees', () => {
     indexer.UniswapV4PoolPosition.set({
       id: `uni-${tokenId}`,
       uniqueKey: `uni-${tokenId}`,
+      sender: POSITION_MANAGER_ADDRESS,
       chainId: CHAIN_ID,
       ...range,
       liquidityDelta: liquidity,
@@ -891,6 +919,27 @@ describe('UniswapV4Staking daily reward trees', () => {
     // The forfeited bonus is in no leaf, so the operator never funds it.
     t.expect(day4Tree?.totalCumulativeReward).toBe(3n * THIRD + FULL + kept);
     t.expect(day4Tree?.totalPendingBoostReward).toBe(0n);
+  });
+
+  it('a dust NFT minted in the same transaction as a large one earns only for its own liquidity', async (t) => {
+    // One multicall mints #50 with dust liquidity and #51 with a lot, both wide range. Alice stakes
+    // #50 next to Carol's #44 (1e18). #51 is never staked.
+    const DUST = 1_000n;
+    nfts['50'] = { range: WIDE_RANGE, liquidity: DUST };
+    const mintBlock = dayBlock(1) - 30;
+    const expected = shares({ '50:1': 20, '44:1': 20 });
+    const changes = await run(
+      dayBlock(1),
+      nftTransfer(mintBlock, ZERO, ALICE, 50n, 1),
+      nftLiquidity(mintBlock, 50n, DUST, WIDE_RANGE, 2),
+      nftTransfer(mintBlock, ZERO, ALICE, 51n, 3),
+      nftLiquidity(mintBlock, 51n, 10n ** 21n, WIDE_RANGE, 4),
+      deposit(dayBlock(1) - 20, ALICE, 50n, 1n, { logIndex: 1 }),
+      deposit(dayBlock(1) - 20, CAROL, 44n, 1n, { logIndex: 2 }),
+    );
+
+    expectTree(t, changes, 1, expected);
+    t.expect(expected['50:1']! < FULL / 10n ** 12n).toBe(true);
   });
 
   it('releases a held bonus on a day nobody is in range', async (t) => {

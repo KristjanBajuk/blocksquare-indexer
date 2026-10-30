@@ -630,8 +630,12 @@ type UniswapV4Pool {
 }
 
 type UniswapV4PoolPosition {
-  id: ID! # ${chainId}-${poolId}-${tickLower}-${tickUpper}-${salt}
+  "PositionManager NFT: ${chainId}-${tokenId} (its salt is bytes32(tokenId)). Any other caller: ${chainId}-${poolId}-${sender}-${tickLower}-${tickUpper}-${salt}"
+  id: ID!
+  "Same as id"
   uniqueKey: String! @index
+  "Caller of PoolManager.modifyLiquidity, i.e. the v4 position owner"
+  sender: String!
   chainId: Int!
   tickLower: BigInt!
   tickUpper: BigInt!
@@ -646,7 +650,7 @@ type UniswapV4PoolPosition {
 }
 
 type UniswapV4PoolPositionRecord {
-  id: ID! # ${chainId}-${poolId}-${tickLower}-${tickUpper}-${salt}
+  id: ID! # ${positionId}-${blockNumber}-${logIndex}
   blockNumber: Int!
   blockTimestamp: Int!
   uniqueKey: String! @index
